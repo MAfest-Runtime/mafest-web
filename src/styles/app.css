@@ -1005,6 +1005,69 @@ button:disabled:hover {
   font-size: var(--text-s);
 }
 
+/* ---------- 알아두면 좋은 개념 ---------- */
+
+.concepts {
+  margin-top: var(--space-5);
+}
+
+.concepts__title {
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-s);
+  font-weight: 600;
+}
+
+.concepts__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.concept__title {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-m);
+}
+
+.concept__summary {
+  overflow-wrap: anywhere;
+}
+
+.concept__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.concept__toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.concept__detail {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.concept__sources {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.concept__reviewed {
+  margin-top: var(--space-2);
+  font-size: var(--text-s);
+}
+
 /* ---------- 질문 해석 ---------- */
 
 .interp {

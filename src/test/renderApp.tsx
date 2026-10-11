@@ -18,6 +18,7 @@ export function testApi(overrides: Partial<SearchApi> = {}): SearchApi {
     search: vi.fn(mock.search),
     getProduct: vi.fn(mock.getProduct),
     getMeta: vi.fn(mock.getMeta),
+    explain: vi.fn(mock.explain),
     // search만 바꾼 테스트는 같은 응답(또는 같은 오류)을 스트림으로도 내게 한다.
     searchStream: vi.fn(
       overrides.search

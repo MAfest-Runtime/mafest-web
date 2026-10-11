@@ -439,6 +439,42 @@ export interface Meta {
   llm_available: boolean;
 }
 
+/** 설명 주제의 출처(yaml ConceptSource). `url`은 http(s)만 온다. */
+export interface ConceptSource {
+  title: string;
+  url: string;
+}
+
+/** 검토된 설명 자료 한 주제(yaml ConceptTopic). 일반 개념 설명이며 특정 상품의 조회 근거가 아니다. */
+export interface ConceptTopic {
+  id: string;
+  title: string;
+  /** 짧은 설명. */
+  summary: string;
+  /** 상세 설명. 응답에 이미 들어 있어 펼쳐도 요청을 보내지 않는다. */
+  detail: string;
+  sources: ConceptSource[];
+  /** 자료를 검토한 날(YYYY-MM-DD). */
+  reviewed_at: string;
+}
+
+/** `POST /v1/explain` 요청(yaml ExplainRequest). 질문 원문은 담지 않는다. */
+export interface ExplainRequest {
+  domains: DomainKey[];
+  axes: string[];
+  sort_axis: string | null;
+}
+
+export interface ExplainResponse {
+  topics: ConceptTopic[];
+}
+
+/** 설명 주제 상한. */
+export const CONCEPT_TOPICS_MAX = 2;
+export const CONCEPT_SOURCES_MAX = 3;
+export const EXPLAIN_DOMAINS_MAX = 6;
+export const EXPLAIN_AXES_MAX = 12;
+
 export interface SearchApi {
   search(question: string, signal?: AbortSignal): Promise<SearchResponse>;
   getProduct(
@@ -447,6 +483,11 @@ export interface SearchApi {
     signal?: AbortSignal,
   ): Promise<ProductDetail>;
   getMeta(signal?: AbortSignal): Promise<Meta>;
+  /**
+   * `POST /v1/explain`. 검색과 별도로 부르는 개념 설명이다. 주제는 0~2개이고 비어 있으면 정상이다.
+   * 실패해도 검색 결과는 그대로 둔다(호출한 쪽이 설명 영역만 비운다).
+   */
+  explain(body: ExplainRequest, signal?: AbortSignal): Promise<ExplainResponse>;
   /**
    * `POST /v1/search/stream`. 검사를 마친 이벤트를 도착 순서대로 낸다. 마지막은 `done`이다.
    * - 스트림을 열기 전 오류(422·429·504 등)와 `error` 이벤트는 ApiError로 던진다.
@@ -498,8 +539,8 @@ export class ApiError extends Error {
 export const QUESTION_MAX = 200;
 /** 정리하기 전 원래 질문 길이 상한(SearchRequest.question maxLength). */
 export const QUESTION_RAW_MAX = 1000;
-/** answer.text 상한(최대 5문장). */
-export const ANSWER_TEXT_MAX = 400;
+/** answer.text 상한(최대 5문장·600자). */
+export const ANSWER_TEXT_MAX = 600;
 /** suggestions 상한. */
 export const SUGGESTIONS_MAX = 3;
 

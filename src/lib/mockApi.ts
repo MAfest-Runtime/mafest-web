@@ -4,6 +4,7 @@ import {
   bond,
   caveat,
   count,
+  explainFixtureFor,
   errorOutcome,
   fallback,
   meta,
@@ -176,6 +177,11 @@ export function createMockApi(delayScale = 1): SearchApi {
     async getMeta(signal) {
       await wait(100 * delayScale, signal);
       return structuredClone(meta);
+    },
+
+    async explain(body, signal) {
+      await wait(150 * delayScale, signal);
+      return explainFixtureFor(body);
     },
   };
 }

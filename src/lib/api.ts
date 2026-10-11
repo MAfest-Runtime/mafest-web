@@ -10,6 +10,7 @@ import {
 import {
   ContractError,
   validateErrorBody,
+  validateExplainResponse,
   validateMeta,
   validateProductDetail,
   validateSearchResponse,
@@ -245,5 +246,16 @@ export const httpApi: SearchApi = {
     const { response, body } = await request("/v1/meta", { signal });
     if (!response.ok) fail(response, body);
     return checked(validateMeta, body);
+  },
+
+  async explain(body, signal) {
+    const { response, body: payload } = await request("/v1/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) fail(response, payload);
+    return checked(validateExplainResponse, payload);
   },
 };

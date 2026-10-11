@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { httpApi } from "./api";
-import { answered, errorOutcome, meta, PRODUCT_FIXTURES } from "./fixtures";
+import {
+  answered,
+  CONCEPT_TOPICS,
+  errorOutcome,
+  meta,
+  PRODUCT_FIXTURES,
+} from "./fixtures";
 import { ApiError } from "./types";
 
 /*
@@ -181,5 +187,41 @@ describe("products · meta", () => {
     const result = await httpApi.getMeta();
 
     expect(result.examples).toEqual(examples);
+  });
+});
+
+describe("explain", () => {
+  const body = { domains: ["kr_etf" as const], axes: [], sort_axis: "aum" };
+
+  test("posts the applied domains, axes and sort axis as JSON to /v1/explain and reads the topics", async () => {
+    const fetchMock = respond(200, { topics: [CONCEPT_TOPICS.aum] });
+
+    const result = await httpApi.explain(body);
+
+    expect(result.topics).toHaveLength(1);
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/v1/explain");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual(body);
+    expect(Object.keys(init.headers)).not.toContain("Authorization");
+  });
+
+  test("turns a response that breaks the contract into an invalid_response error", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    respond(200, { topics: [{ ...CONCEPT_TOPICS.aum, extra: true }] });
+
+    const error = await failure(httpApi.explain(body));
+
+    expect(error.code).toBe("invalid_response");
+  });
+
+  test("maps 429 and 5xx to ApiError without reading a topic list", async () => {
+    respondText(429, "Too Many Requests", { "Retry-After": "7" });
+    const limited = await failure(httpApi.explain(body));
+    expect(limited.status).toBe(429);
+    expect(limited.retryAfter).toBe(7);
+
+    respond(500, { code: "internal", message: "x", request_id: "r-1" });
+    expect((await failure(httpApi.explain(body))).status).toBe(500);
   });
 });
