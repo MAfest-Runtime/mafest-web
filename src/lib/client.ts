@@ -19,6 +19,7 @@ function lazyMock(): SearchApi {
     getProduct: (domain, id, signal) =>
       load().then((api) => api.getProduct(domain, id, signal)),
     getMeta: (signal) => load().then((api) => api.getMeta(signal)),
+    explain: (body, signal) => load().then((api) => api.explain(body, signal)),
     searchStream: (question, signal) =>
       (async function* () {
         const api = await load();

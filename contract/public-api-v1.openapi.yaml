@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 금융상품 질의 검색 공개 API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     mafest-web이 쓰는 공개 API(`/v1`). 사람이 읽는 설명은 mafest
     `docs/plans/39_공개API_명세.md`, 이 파일은 기계가 검사하는 정본이다.
@@ -16,6 +16,8 @@ info:
       `contract.test.ts`(픽스처 ↔ 이 스키마, 깨진 응답 ↔ 두 검사기)가 함께 바뀌어야 한다.
     - 공개 trace·운영 로그 최소화 규칙은 `TraceStep.query` 설명과 39 §2-11을 따른다.
     - [r9] `POST /v1/search/stream`은 같은 결과를 SSE 이벤트로 나눠 보내고, 마지막 `done`에 SearchResponse 전체를 싣는다.
+    - [1.4.0] `answer.text` 상한이 600자로 늘었다(문장 5개 상한은 그대로). `POST /v1/explain`은 검색과 별도로
+      적용된 상품군·조건 축·정렬 축에 맞는 개념 설명(주제 0~2개)을 준다. 검색 `suggestions`와 섞지 않는다.
 servers:
   - url: /
 paths:
@@ -182,6 +184,59 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Meta" }
 
+  /v1/explain:
+    post:
+      operationId: explainConcepts
+      summary: 검색에 적용된 상품군·조건 축·정렬 축에 맞는 개념 설명을 준다
+      description: |
+        [1.4.0] 검색 결과와 별도로 부르는 API다. 질문 원문은 보내지 않는다. 웹은 최종 검색 응답의
+        `interpretation`에서 상품군·조건 축·정렬 축을 뽑아 보낸다. 서버는 검토된 설명 자료에서 주제를 고르고
+        출처·검토일은 코드가 붙인다. 근거가 없으면 `topics`가 빈 배열인 정상 응답을 준다.
+        설명 실패가 검색 결과를 실패시키지 않는다(웹은 설명 영역만 비운다).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExplainRequest" }
+      responses:
+        "200":
+          description: 설명 주제 0~2개
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+            Cache-Control:
+              schema: { const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExplainResponse" }
+        "422":
+          description: 본문이 JSON이 아니거나 필드가 범위를 벗어남
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "429":
+          description: Traefik IP 요청 제한. 본문은 text/plain일 수 있다.
+          headers:
+            Retry-After: { $ref: "#/components/headers/Retry-After" }
+          content:
+            text/plain:
+              schema: { type: string }
+        "500":
+          description: 처리 중 예외
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "504":
+          description: 전체 처리 시한 초과
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+
 components:
   headers:
     X-Request-Id:
@@ -309,8 +364,8 @@ components:
         text:
           type: string
           minLength: 1
-          maxLength: 400
-          description: "평문 최대 5문장. Markdown·HTML 없음. 웹은 그대로 그린다. [r9] 결과 비교 요약 허용"
+          maxLength: 600
+          description: "평문 최대 5문장·600자. Markdown·HTML 없음. 웹은 그대로 그린다. [r9] 결과 비교 요약 허용"
         generated_by: { $ref: "#/components/schemas/GeneratedBy" }
         notices:
           type: array
@@ -854,6 +909,63 @@ components:
         llm_available:
           type: boolean
           description: vLLM /v1/models 확인 결과(10초 캐시, 2초 시한)
+
+    # ── [1.4.0] 개념 설명 ───────────────────────────────────
+    ExplainRequest:
+      description: 최종 검색 응답의 interpretation에서 뽑은 값. 질문 원문은 담지 않는다.
+      type: object
+      required: [domains, axes, sort_axis]
+      additionalProperties: false
+      properties:
+        domains:
+          type: array
+          minItems: 1
+          maxItems: 6
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/DomainKey" }
+        axes:
+          description: 적용된 조건 축 키(Condition.axis). 중복 없이.
+          type: array
+          maxItems: 12
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 64 }
+        sort_axis:
+          description: 적용된 정렬 축 키(Sort.axis). 정렬이 없으면 null.
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 64 }
+            - { type: "null" }
+    ConceptSource:
+      type: object
+      required: [title, url]
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 60 }
+        url: { type: string, pattern: "^https?://\\S+$", maxLength: 300 }
+    ConceptTopic:
+      description: 검토된 설명 자료 한 주제. 일반 개념 설명이며 특정 상품의 조회 근거가 아니다.
+      type: object
+      required: [id, title, summary, detail, sources, reviewed_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, pattern: "^[a-z0-9_]+$", maxLength: 64 }
+        title: { type: string, minLength: 1, maxLength: 30 }
+        summary: { type: string, minLength: 1, maxLength: 120 }
+        detail: { type: string, minLength: 1, maxLength: 600 }
+        sources:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items: { $ref: "#/components/schemas/ConceptSource" }
+        reviewed_at: { $ref: "#/components/schemas/IsoDate" }
+    ExplainResponse:
+      type: object
+      required: [topics]
+      additionalProperties: false
+      properties:
+        topics:
+          type: array
+          maxItems: 2
+          items: { $ref: "#/components/schemas/ConceptTopic" }
 
     # ── [r9] 스트림 이벤트 data ─────────────────────────────
     StreamStart:

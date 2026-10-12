@@ -2,9 +2,11 @@ import { useState, type ReactNode } from "react";
 import { CiteFocusContext, MappingFocusContext } from "../lib/citeFocus";
 import type { CiteTarget } from "../lib/explain";
 import type { StreamPhase } from "../lib/searchStream";
-import type { ResultRow, SearchResponse } from "../lib/types";
+import type { ResultRow, SearchApi, SearchResponse } from "../lib/types";
+import { useConcepts, type Concepts } from "../lib/useConcepts";
 import { TABLE_QUERY, useMediaQuery } from "../lib/useMediaQuery";
 import { AnswerCard, BaseDates } from "./AnswerCard";
+import { ConceptCards } from "./ConceptCards";
 import { Icon } from "./Icon";
 import { InterpretationCard } from "./InterpretationCard";
 import { ProcessView } from "./ProcessView";
@@ -72,6 +74,7 @@ export function OutcomeView({
   selectedId,
   onOpen,
   onRetry,
+  api,
 }: {
   response: SearchResponse;
   /** 스트리밍 중일 때만. phase 가 undefined 면 최종 답까지 받은 것이다(후속 질문·done 대기). */
@@ -79,7 +82,11 @@ export function OutcomeView({
   selectedId: string | null;
   onOpen?: (domain: string, row: ResultRow) => void;
   onRetry: () => void;
+  /** 개념 설명을 부를 API. 없으면 설명 영역을 만들지 않는다. */
+  api?: Pick<SearchApi, "explain">;
 }) {
+  // 설명은 최종 응답(done)이 온 뒤 검색 실행당 한 번만 부른다. 탭을 바꿔 본문이 다시 그려져도 여기 상태가 남는다.
+  const concepts = useConcepts(response, stream === undefined, api);
   const wide = useMediaQuery(TABLE_QUERY);
   const [view, setView] = useState<View>("result");
   const [focus, setFocus] = useState<CiteTarget | null>(null);
@@ -102,6 +109,7 @@ export function OutcomeView({
       selectedId={selectedId}
       onOpen={onOpen}
       onRetry={onRetry}
+      concepts={concepts}
     />
   );
 
@@ -172,12 +180,14 @@ function OutcomeBody({
   selectedId,
   onOpen,
   onRetry,
+  concepts,
 }: {
   response: SearchResponse;
   stream?: { phase: StreamPhase | undefined; sentences: string[] };
   selectedId: string | null;
   onOpen?: (domain: string, row: ResultRow) => void;
   onRetry: () => void;
+  concepts: Concepts;
 }) {
   const { outcome, interpretation, results } = response;
 
@@ -214,6 +224,7 @@ function OutcomeBody({
             }
           />
           {groups}
+          <ConceptCards concepts={concepts} />
           <QuestionChips
             title="이어서 물어볼 질문"
             options={response.suggestions}

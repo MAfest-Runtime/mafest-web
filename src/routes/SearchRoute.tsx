@@ -101,6 +101,7 @@ export function SearchRoute({ api }: { api: SearchApi }) {
                 selectedId={selected?.productId ?? null}
                 onOpen={(domain, row) => openProduct(domain, row.product_id)}
                 onRetry={retry}
+                api={api}
               />
             )}
           {question !== null && <InvestmentNotice />}

@@ -1,7 +1,10 @@
 import type {
   CellValue,
   Column,
+  ConceptTopic,
   DomainKey,
+  ExplainRequest,
+  ExplainResponse,
   GraphEdge,
   GraphNode,
   InterpretationMapping,
@@ -2030,6 +2033,90 @@ export const PRODUCT_FIXTURES: ProductDetail[] = (() => {
 
 // ---------------------------------------------------------------------------
 // 메타
+
+// ---------------------------------------------------------------------------
+// 개념 설명(POST /v1/explain). 일반 개념 설명이며 지어낸 합성 문장이다. 출처 주소도 예시 도메인이다.
+
+export const CONCEPT_TOPICS: Record<string, ConceptTopic> = {
+  expense_ratio: {
+    id: "expense_ratio",
+    title: "총보수",
+    summary:
+      "펀드·ETF를 맡아 운용하는 대가로 해마다 순자산에서 빠지는 비용입니다.",
+    detail:
+      "총보수는 운용·판매·수탁 보수를 합친 연간 비용 비율입니다. 순자산에서 매일 조금씩 차감되어 기준가격에 반영되므로 따로 청구서가 오지 않습니다. 비슷한 상품이라면 총보수가 낮을수록 장기 보유 시 비용 부담이 작습니다.",
+    sources: [
+      {
+        title: "내부 조회 자료 · 총보수 항목 설명",
+        url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/expense_ratio.md",
+      },
+    ],
+    reviewed_at: "2026-10-01",
+  },
+  aum: {
+    id: "aum",
+    title: "순자산",
+    summary: "상품이 투자자에게서 모아 굴리고 있는 자산의 총액입니다.",
+    detail:
+      "순자산은 상품이 보유한 자산에서 부채를 뺀 금액입니다. 순자산이 크면 거래가 활발한 경향이 있지만 수익이 좋다는 뜻은 아닙니다. 기준일마다 값이 달라지므로 조회 결과의 기준일을 함께 확인합니다.",
+    sources: [
+      {
+        title: "내부 조회 자료 · 순자산 항목 설명",
+        url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/aum.md",
+      },
+      {
+        title: "내부 조회 자료 · 기준일 안내",
+        url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/base_date.md",
+      },
+    ],
+    reviewed_at: "2026-10-01",
+  },
+  return_1y: {
+    id: "return_1y",
+    title: "수익률",
+    summary:
+      "정해진 기간 동안 가격이 얼마나 변했는지를 비율로 나타낸 과거 성과입니다.",
+    detail:
+      "수익률은 과거 기간의 변화율이며 미래 수익을 보장하지 않습니다. 기간(1개월·1년 등)과 기준일이 다르면 서로 비교할 수 없습니다. 분배금 재투자 여부에 따라 계산이 달라질 수 있습니다.",
+    sources: [
+      {
+        title: "내부 조회 자료 · 수익률 항목 설명",
+        url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/return.md",
+      },
+    ],
+    reviewed_at: "2026-10-01",
+  },
+  credit_grade: {
+    id: "credit_grade",
+    title: "신용등급",
+    summary:
+      "채권을 발행한 곳이 원금과 이자를 갚을 능력을 등급으로 나타낸 것입니다.",
+    detail:
+      "신용등급은 평가회사가 발행자의 상환 능력을 문자로 표시한 것입니다. 등급이 낮을수록 이자는 높을 수 있지만 상환하지 못할 위험도 커집니다. 평가회사마다 등급이 다를 수 있습니다.",
+    sources: [
+      {
+        title: "내부 조회 자료 · 신용등급 항목 설명",
+        url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/credit_grade.md",
+      },
+    ],
+    reviewed_at: "2026-10-01",
+  },
+};
+
+/** 정렬 축 → 조건 축 → 상품군 순으로 설명 주제를 고른다(최대 2개). 근거가 없으면 빈 목록이다. */
+export function explainFixtureFor(body: ExplainRequest): ExplainResponse {
+  const wanted = [
+    ...(body.sort_axis ? [body.sort_axis] : []),
+    ...body.axes,
+    ...(body.domains.includes("bond") ? ["credit_grade"] : []),
+  ];
+  const topics: ConceptTopic[] = [];
+  for (const axis of wanted) {
+    const topic = CONCEPT_TOPICS[axis];
+    if (topic && !topics.some((t) => t.id === topic.id)) topics.push(topic);
+  }
+  return { topics: structuredClone(topics.slice(0, 2)) };
+}
 
 export const meta: Meta = {
   domains: [

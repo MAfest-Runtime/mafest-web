@@ -9,16 +9,19 @@ import {
   ambiguous,
   answered,
   caveatOutage,
+  CONCEPT_TOPICS,
   count,
+  explainFixtureFor,
   meta,
   noResult,
   PRODUCT_FIXTURES,
   STREAM_FIXTURES,
   type StreamFixtureEvent,
 } from "./lib/fixtures";
-import type { SearchResponse } from "./lib/types";
+import type { ExplainResponse, SearchResponse } from "./lib/types";
 import {
   validateErrorBody,
+  validateExplainResponse,
   validateMeta,
   validateProductDetail,
   validateSearchResponse,
@@ -37,9 +40,12 @@ const root = process.cwd();
 const CONTRACT_PATH = resolve(root, "contract/public-api-v1.openapi.yaml");
 const spec = parse(readFileSync(CONTRACT_PATH, "utf8"));
 
-/** r9(1.3.0) 정본의 sha256. mafest `tests/contract/` 사본도 같은 값을 고정한다. 계약을 바꾸면 두 곳을 함께 바꾼다. */
+/**
+ * 1.4.0 정본의 sha256. mafest `tests/contract/` 사본은 이 파일과 바이트 단위로 같아야 하고 같은 값을 고정한다.
+ * 계약을 바꾸면 두 곳을 함께 바꾼다.
+ */
 const CONTRACT_SHA256 =
-  "e6c7a2ae8e6a7c12a871cec0f71885a4b95c55fee79bd1b2ea12c7bc0e60dd42";
+  "40f57f508e80d85565da20f5c357d69319caf7a22ff29e8d397934d16d858150";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 ajv.addSchema({ ...spec, $id: "spec" });
@@ -145,10 +151,10 @@ type Cells = { rows: { values: Record<string, Record<string, unknown>> }[] }[];
 
 const MUTATIONS: Mutation[] = [
   [
-    "answer.text 400자 초과",
+    "answer.text 600자 초과",
     answered,
     (r) => {
-      (r.answer as Record<string, unknown>).text = "가".repeat(401);
+      (r.answer as Record<string, unknown>).text = "가".repeat(601);
     },
   ],
   [
@@ -423,12 +429,182 @@ describe("stream contract", () => {
   });
 });
 
+describe("answer text limit", () => {
+  const withText = (text: string, base = answered) => {
+    const response = structuredClone(base) as unknown as {
+      answer: { text: string };
+    };
+    response.answer.text = text;
+    return response;
+  };
+
+  test("exactly 600 characters pass both the spec and the web validator", () => {
+    const response = withText("가".repeat(600));
+    expect(check("SearchResponse", response)).toEqual([]);
+    expect(() =>
+      validateSearchResponse(structuredClone(response)),
+    ).not.toThrow();
+    const answer = { ...answered.answer, text: "가".repeat(600) };
+    expect(check("Answer", answer)).toEqual([]);
+    expect(check("StreamAnswerDone", { answer })).toEqual([]);
+  });
+
+  test("601 characters are rejected by the spec, the validator and answer_done", () => {
+    const answer = { ...answered.answer, text: "가".repeat(601) };
+    expect(check("Answer", answer)).not.toEqual([]);
+    expect(check("StreamAnswerDone", { answer })).not.toEqual([]);
+    expect(() => validateSearchResponse(withText("가".repeat(601)))).toThrow();
+    const events = structuredClone(STREAM_FIXTURES.answered);
+    const index = events.findIndex((e) => e.event === "answer_done");
+    (events[index].data as { answer: { text: string } }).answer.text =
+      "가".repeat(601);
+    expect(() => validateStream(events)).toThrow();
+  });
+
+  test("a sixth sentence event index is still rejected", () => {
+    expect(check("StreamAnswerDelta", { index: 4, text: "문장" })).toEqual([]);
+    expect(check("StreamAnswerDelta", { index: 5, text: "문장" })).not.toEqual(
+      [],
+    );
+  });
+});
+
+describe("explain contract", () => {
+  const topic = () => structuredClone(CONCEPT_TOPICS.aum);
+  const bodies: [string, ExplainResponse][] = [
+    ["empty topics", { topics: [] }],
+    ["one topic", { topics: [topic()] }],
+    [
+      "two topics",
+      { topics: [topic(), structuredClone(CONCEPT_TOPICS.expense_ratio)] },
+    ],
+  ];
+
+  test.each(bodies)(
+    "accepts %s in the spec and the web validator",
+    (_, body) => {
+      expect(check("ExplainResponse", body)).toEqual([]);
+      expect(() =>
+        validateExplainResponse(structuredClone(body)),
+      ).not.toThrow();
+    },
+  );
+
+  test("every mock explanation fixture passes both checkers", () => {
+    for (const request of [
+      { domains: ["kr_etf"], axes: [], sort_axis: "aum" },
+      { domains: ["bond"], axes: ["credit_grade"], sort_axis: null },
+      { domains: ["kr_etf"], axes: ["expense_ratio"], sort_axis: "aum" },
+      { domains: ["kr_etn"], axes: [], sort_axis: null },
+    ] as const) {
+      const body = explainFixtureFor({
+        ...request,
+        domains: [...request.domains],
+        axes: [...request.axes],
+      });
+      expect(check("ExplainResponse", body)).toEqual([]);
+      expect(() => validateExplainResponse(body)).not.toThrow();
+    }
+  });
+
+  const broken: [string, (b: { topics: Record<string, unknown>[] }) => void][] =
+    [
+      [
+        "three topics",
+        (b) =>
+          b.topics.push(
+            structuredClone(b.topics[0]),
+            structuredClone(b.topics[0]),
+          ),
+      ],
+      ["unknown top-level key", (b) => Object.assign(b, { extra: 1 })],
+      ["unknown topic key", (b) => (b.topics[0].score = 1)],
+      ["missing detail", (b) => delete b.topics[0].detail],
+      ["id with capital letters", (b) => (b.topics[0].id = "Aum")],
+      [
+        "title over 30 characters",
+        (b) => (b.topics[0].title = "가".repeat(31)),
+      ],
+      [
+        "summary over 120 characters",
+        (b) => (b.topics[0].summary = "가".repeat(121)),
+      ],
+      [
+        "detail over 600 characters",
+        (b) => (b.topics[0].detail = "가".repeat(601)),
+      ],
+      ["no sources", (b) => (b.topics[0].sources = [])],
+      [
+        "four sources",
+        (b) =>
+          (b.topics[0].sources = Array.from({ length: 4 }, (_, i) => ({
+            title: `출처 ${i}`,
+            url: `https://example.org/${i}`,
+          }))),
+      ],
+      [
+        "javascript url",
+        (b) =>
+          (b.topics[0].sources = [{ title: "x", url: "javascript:alert(1)" }]),
+      ],
+      [
+        "url with a space",
+        (b) =>
+          (b.topics[0].sources = [
+            { title: "x", url: "https://example.org/a b" },
+          ]),
+      ],
+      [
+        "source unknown key",
+        (b) =>
+          (b.topics[0].sources = [
+            { title: "x", url: "https://example.org", rel: "y" },
+          ]),
+      ],
+      [
+        "reviewed_at not a date",
+        (b) => (b.topics[0].reviewed_at = "2026/10/01"),
+      ],
+      ["reviewed_at null", (b) => (b.topics[0].reviewed_at = null)],
+    ];
+
+  test.each(broken)(
+    "rejects %s in both the spec and the web validator",
+    (_, mutate) => {
+      const body = {
+        topics: [structuredClone(CONCEPT_TOPICS.aum)],
+      } as unknown as {
+        topics: Record<string, unknown>[];
+      };
+      mutate(body);
+      expect(check("ExplainResponse", body), "명세가 받아 줌").not.toEqual([]);
+      expect(
+        () => validateExplainResponse(structuredClone(body)),
+        "웹이 받아 줌",
+      ).toThrow();
+    },
+  );
+
+  test("request schema needs one to six domains and rejects unknown keys", () => {
+    const ok = { domains: ["kr_etf"], axes: [], sort_axis: null };
+    expect(check("ExplainRequest", ok)).toEqual([]);
+    expect(check("ExplainRequest", { ...ok, domains: [] })).not.toEqual([]);
+    expect(check("ExplainRequest", { ...ok, domains: ["etf_kr"] })).not.toEqual(
+      [],
+    );
+    expect(check("ExplainRequest", { ...ok, question: "x" })).not.toEqual([]);
+    expect(
+      check("ExplainRequest", { domains: ["kr_etf"], axes: [] }),
+    ).not.toEqual([]);
+  });
+});
+
 describe("contract pin", () => {
-  test("canonical yaml keeps the frozen r9 sha256", () => {
+  test("canonical yaml keeps the frozen 1.4.0 sha256", () => {
     const digest = createHash("sha256")
       .update(readFileSync(CONTRACT_PATH))
       .digest("hex");
     expect(digest).toBe(CONTRACT_SHA256);
-    expect(spec.info.version).toBe("1.3.0");
+    expect(spec.info.version).toBe("1.4.0");
   });
 });

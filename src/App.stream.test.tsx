@@ -1,10 +1,17 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   answered,
   caveat,
   fallback,
   notCollected,
+  OUTCOME_FIXTURES,
   STREAM_FIXTURES,
 } from "./lib/fixtures";
 import { RETRY_DELAY_MS } from "./lib/searchStream";
@@ -475,5 +482,162 @@ describe("r9 fixtures and unknown values", () => {
     });
     await screen.findByRole("region", { name: "답변" });
     expect(screen.getAllByText("후속 질문").length).toBeGreaterThan(0);
+  });
+});
+
+/*
+ * 후속 질문 카드 진단. 받은 후보가 어느 단계에서 사라지는지 웹 쪽 경로를 하나씩 고정한다.
+ * 후보가 비어 오면 웹은 아무것도 만들어 내지 않는다(API의 "후보 없음"과 웹의 "표시 오류"를 구분하기 위해서다).
+ */
+describe("suggestion chips along the stream path", () => {
+  const streamChips = [
+    { label: "총보수 순위로", question: "총보수 낮은 국내 ETF 5개" },
+    { label: "분배 많은 순", question: "분배율 높은 국내 ETF 5개" },
+  ];
+
+  function eventsWith(
+    streamed: SearchResponse["suggestions"],
+    finalSuggestions: SearchResponse["suggestions"],
+  ): StreamEvent[] {
+    const finalResponse = {
+      ...structuredClone(answered),
+      suggestions: finalSuggestions,
+    };
+    return [
+      start,
+      interpretation,
+      results,
+      delta0,
+      delta1,
+      answerDone,
+      { event: "suggestions", data: { suggestions: streamed } },
+      { event: "done", data: { response: finalResponse } },
+    ] as unknown as StreamEvent[];
+  }
+
+  function replay(events: StreamEvent[]): SearchApi {
+    return apiWith(async function* () {
+      yield* events;
+    });
+  }
+
+  test("chips received on the stream remain after done when the final response carries the same chips, and a chip searches", async () => {
+    setViewport(1280);
+    const { user } = renderApp({
+      api: replay(eventsWith(streamChips, streamChips)),
+      path: searchPath(answered.question),
+    });
+    const chip = await screen.findByRole("link", { name: /총보수 순위로/ });
+    await user.click(chip);
+    expect(currentLocation()).toContain("총보수 낮은 국내 ETF 5개");
+  });
+
+  test("the final response is authoritative: chips streamed earlier disappear when done carries none", async () => {
+    setViewport(1280);
+    renderApp({
+      api: replay(eventsWith(streamChips, [])),
+      path: searchPath(answered.question),
+    });
+    await screen.findByRole("region", { name: "답변" });
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: /총보수 순위로/ })).toBeNull(),
+    );
+    // 웹이 임의의 금융 질문을 만들어 채우지 않는다.
+    expect(document.querySelector(".question-chips")).toBeNull();
+  });
+
+  test.each([
+    ["no_result", "조건을 바꿔 보세요"],
+    ["not_collected", "대신 물어볼 수 있는 질문"],
+    ["unread", "다시 물어볼 질문"],
+    ["refused", "대신 할 수 있는 질문"],
+  ] as const)(
+    "%s draws its own chip group when the response has candidates",
+    async (outcome, title) => {
+      const base = OUTCOME_FIXTURES[outcome];
+      const response: SearchResponse = {
+        ...structuredClone(base),
+        suggestions: streamChips,
+      };
+      renderApp({
+        api: testApi({ search: vi.fn().mockResolvedValue(response) }),
+        path: searchPath(base.question),
+      });
+      const group = await screen.findByRole("navigation", { name: title });
+      expect(within(group).getAllByRole("link")).toHaveLength(2);
+    },
+  );
+
+  test("on a narrow screen the chips live in the result tab and come back after visiting another tab", async () => {
+    setViewport(390);
+    const { user } = renderApp({
+      api: replay(eventsWith(streamChips, streamChips)),
+      path: searchPath(answered.question),
+    });
+    await screen.findByRole("link", { name: /총보수 순위로/ });
+
+    await user.click(screen.getByRole("tab", { name: "그래프" }));
+    expect(screen.queryByRole("link", { name: /총보수 순위로/ })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "결과" }));
+    expect(screen.getByRole("link", { name: /총보수 순위로/ })).toBeVisible();
+  });
+
+  test("chips from the retried stream show after a first stream is cut", async () => {
+    vi.useFakeTimers();
+    const complete = eventsWith(streamChips, streamChips);
+    let calls = 0;
+    const searchStream = vi.fn(async function* () {
+      calls += 1;
+      if (calls === 1) {
+        yield* [start, interpretation, results, delta0];
+        throw new StreamCutError();
+      }
+      yield* complete;
+    });
+    renderApp({
+      api: testApi({ searchStream }),
+      path: searchPath(answered.question),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS + 50);
+    });
+    expect(searchStream).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("link", { name: /총보수 순위로/ })).toBeVisible();
+  });
+
+  test("a chip searches while the concept cards only open in place", async () => {
+    setViewport(1280);
+    const { user } = renderApp({
+      api: replay(eventsWith(streamChips, streamChips)),
+      path: searchPath(answered.question),
+    });
+    await screen.findByRole("heading", { name: "알아두면 좋은 개념" });
+    const before = currentLocation();
+    await user.click(screen.getByRole("button", { name: "자세히 보기" }));
+    expect(currentLocation()).toBe(before);
+    await user.click(screen.getByRole("link", { name: /분배 많은 순/ }));
+    expect(currentLocation()).toContain("분배율 높은 국내 ETF 5개");
+  });
+});
+
+describe("concept request timing on the stream", () => {
+  test("the explanation is requested only after done, once", async () => {
+    setViewport(1280);
+    const stream = controlledStream();
+    const api = apiWith(stream.gen);
+    renderApp({ api, path: searchPath(answered.question) });
+    await feed(stream.push, start, interpretation, results, delta0, delta1);
+    await feed(stream.push, answerDone, suggestions);
+    expect(api.explain).not.toHaveBeenCalled();
+
+    // 실제 스트림은 done 뒤에 닫힌다. 화면은 스트림이 끝나야 done 응답으로 확정한다.
+    await feed(stream.push, done);
+    await act(async () => {
+      stream.push("end");
+    });
+    await waitFor(() => expect(api.explain).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByRole("heading", { name: "알아두면 좋은 개념" }),
+    ).toBeVisible();
   });
 });

@@ -17,9 +17,12 @@ import {
   TRACE_STAGES,
   VALUE_SOURCES,
   ANSWER_TEXT_MAX,
+  CONCEPT_SOURCES_MAX,
+  CONCEPT_TOPICS_MAX,
   STREAM_EVENT_NAMES,
   SUGGESTIONS_MAX,
   type ErrorBody,
+  type ExplainResponse,
   type Meta,
   type ProductDetail,
   type SearchResponse,
@@ -518,6 +521,44 @@ export function validateMeta(input: unknown): Meta {
   });
   bool(m.llm_available, "llm_available");
   return m as unknown as Meta;
+}
+
+/** 설명 출처 링크. 화면이 그대로 `href`에 쓰므로 http(s)만 받는다(yaml ConceptSource.url 패턴). */
+const SOURCE_URL = /^https?:\/\/\S+$/;
+const CONCEPT_ID = /^[a-z0-9_]+$/;
+
+/** `POST /v1/explain` 응답(yaml ExplainResponse). 주제 0~2개, 빈 목록은 정상이다. */
+export function validateExplainResponse(input: unknown): ExplainResponse {
+  const e = record(input, "$", ["topics"]);
+  arr(e.topics, "topics", CONCEPT_TOPICS_MAX).forEach((t, i) => {
+    const p = `topics[${i}]`;
+    const topic = record(t, p, [
+      "id",
+      "title",
+      "summary",
+      "detail",
+      "sources",
+      "reviewed_at",
+    ]);
+    const id = str(topic.id, `${p}.id`, 1, 64);
+    if (!CONCEPT_ID.test(id)) throw new ContractError(`${p}.id`);
+    str(topic.title, `${p}.title`, 1, 30);
+    str(topic.summary, `${p}.summary`, 1, 120);
+    str(topic.detail, `${p}.detail`, 1, 600);
+    const sources = arr(topic.sources, `${p}.sources`, CONCEPT_SOURCES_MAX);
+    if (sources.length < 1) throw new ContractError(`${p}.sources`);
+    sources.forEach((s, j) => {
+      const sp = `${p}.sources[${j}]`;
+      const source = record(s, sp, ["title", "url"]);
+      str(source.title, `${sp}.title`, 1, 60);
+      const url = str(source.url, `${sp}.url`, 1, 300);
+      if (!SOURCE_URL.test(url)) throw new ContractError(`${sp}.url`);
+    });
+    const reviewed = str(topic.reviewed_at, `${p}.reviewed_at`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewed))
+      throw new ContractError(`${p}.reviewed_at`);
+  });
+  return e as unknown as ExplainResponse;
 }
 
 /**

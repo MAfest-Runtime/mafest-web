@@ -21,18 +21,24 @@ function metaResponse(): Response {
 
 /** App 은 첫 화면에서 /v1/meta 도 부른다. meta 는 합성 응답으로 답하고 나머지 경로만 시나리오가 정한다. */
 function stubFetch(handler: (path: string) => Response | Promise<Response>) {
-  const fetchMock = vi
-    .fn()
-    .mockImplementation((path: string) =>
-      path === "/v1/meta"
-        ? Promise.resolve(metaResponse())
+  const fetchMock = vi.fn().mockImplementation((path: string) =>
+    path === "/v1/meta"
+      ? Promise.resolve(metaResponse())
+      : path === "/v1/explain"
+        ? // 개념 설명은 이 파일이 보는 검색 경로와 별개다. 근거 없음으로 답해 검색 호출 목록에서 뺀다.
+          Promise.resolve(
+            new Response(JSON.stringify({ topics: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          )
         : Promise.resolve(handler(path)),
-    );
+  );
   vi.stubGlobal("fetch", fetchMock);
   const searchCalls = () =>
     fetchMock.mock.calls
       .map((c) => c[0] as string)
-      .filter((p) => p !== "/v1/meta");
+      .filter((p) => p !== "/v1/meta" && p !== "/v1/explain");
   return { fetchMock, searchCalls };
 }
 
