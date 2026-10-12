@@ -1018,6 +1018,11 @@ button:disabled:hover {
   font-weight: 600;
 }
 
+.concepts__note {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-s);
+}
+
 .concepts__list {
   display: flex;
   flex-direction: column;

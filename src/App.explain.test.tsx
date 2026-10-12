@@ -300,3 +300,97 @@ describe("600 character summary", () => {
     expect(region.textContent).not.toContain("…");
   });
 });
+
+describe("server-provided internal source", () => {
+  const internal: ExplainResponse = {
+    topics: [
+      {
+        id: "aum",
+        title: "순자산",
+        summary: "서버가 만든 짧은 설명입니다.",
+        detail: "서버가 만든 상세 설명입니다.",
+        sources: [
+          {
+            title: "내부 조회 자료 · 순자산 항목 설명",
+            url: "https://example.org/mafest-data/blob/v2026.10.1/concepts/aum.md",
+          },
+        ],
+        reviewed_at: "2026-09-30",
+      },
+    ],
+  };
+
+  test("shows the server title, address, review date and texts unchanged", async () => {
+    setViewport(1280);
+    const { user } = renderApp({
+      api: testApi({
+        search: searchOnly(answered),
+        explain: vi.fn().mockResolvedValue(structuredClone(internal)),
+      }),
+      path: searchPath(answered.question),
+    });
+    const card = await screen.findByRole("article", { name: "순자산" });
+    expect(
+      within(card).getByText("서버가 만든 짧은 설명입니다."),
+    ).toBeVisible();
+
+    await user.click(within(card).getByRole("button", { name: "자세히 보기" }));
+
+    expect(
+      within(card).getByText("서버가 만든 상세 설명입니다."),
+    ).toBeVisible();
+    const link = within(card).getByRole("link", {
+      name: "내부 조회 자료 · 순자산 항목 설명",
+    });
+    expect(link).toHaveAttribute("href", internal.topics[0].sources[0].url);
+    expect(within(card).getByText("검토일 2026-09-30")).toBeVisible();
+  });
+
+  test("the scope note appears only with topics, never while loading or when empty or failed", async () => {
+    setViewport(1280);
+    const NOTE = /일반적인 개념 설명입니다/;
+    const pending = deferred<ExplainResponse>();
+    const explain = vi.fn().mockReturnValue(pending.promise);
+    renderApp({
+      api: testApi({ search: searchOnly(answered), explain }),
+      path: searchPath(answered.question),
+    });
+    await screen.findByText(/관련 개념을 찾고 있습니다/);
+    expect(screen.queryByText(NOTE)).toBeNull();
+
+    await act(async () => pending.resolve(structuredClone(internal)));
+    expect(await screen.findByText(NOTE)).toBeVisible();
+  });
+
+  test.each([
+    ["an empty list", () => Promise.resolve({ topics: [] })],
+    ["a failure", () => Promise.reject(new ApiError(500, "internal"))],
+  ])("%s leaves no scope note", async (_, reply) => {
+    setViewport(1280);
+    const explain = vi.fn().mockImplementation(reply);
+    renderApp({
+      api: testApi({ search: searchOnly(answered), explain }),
+      path: searchPath(answered.question),
+    });
+    await screen.findByRole("region", { name: "답변" });
+    await waitFor(() => expect(explain).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/일반적인 개념 설명입니다/)).toBeNull();
+  });
+
+  test("the concept area holds no search links; follow-up chips stay a separate group", async () => {
+    setViewport(1280);
+    renderApp({
+      api: testApi({ search: searchOnly(answered) }),
+      path: searchPath(answered.question),
+    });
+    const concepts = (
+      await screen.findByRole("heading", { name: HEADING })
+    ).closest("section")!;
+    expect(
+      concepts.querySelectorAll("a[href^='/search'], a[href*='?q=']"),
+    ).toHaveLength(0);
+    expect(
+      screen.getByRole("navigation", { name: "이어서 물어볼 질문" }),
+    ).toBeVisible();
+  });
+});
