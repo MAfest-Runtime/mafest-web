@@ -115,6 +115,11 @@ export const ERROR_CODES = [
   "product_not_found",
   "unavailable",
   "internal",
+  "session_expired",
+  "session_conflict",
+  "turn_in_progress",
+  "turn_indeterminate",
+  "confirm_unsupported",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -475,8 +480,77 @@ export const CONCEPT_SOURCES_MAX = 3;
 export const EXPLAIN_DOMAINS_MAX = 6;
 export const EXPLAIN_AXES_MAX = 12;
 
+/** 확인 답변 동작. 첫 버전은 답변 입력 하나뿐이다(기본 기준으로 계속하는 동작은 없다). */
+export const CONFIRM_ACTIONS = ["answer_text"] as const;
+export type ConfirmAction = (typeof CONFIRM_ACTIONS)[number];
+
+/** 확인 답변 글자 수 상한(코드 포인트). yaml ConfirmRequest.answer.maxLength 와 같다. */
+export const CONFIRM_ANSWER_MAX = 200;
+
+export interface ConfirmSession {
+  id: string;
+  /** 제출 때 헤더로 되돌려 보내는 값. 메모리(상태)에만 두고 URL·콘솔·저장소에 쓰지 않는다. */
+  secret: string;
+  version: number;
+  expires_at: string;
+}
+
+/** 기준 확인 대기(yaml ConfirmationRequired). 화면은 서버가 준 문구만 보여 준다. */
+export interface ConfirmationRequired {
+  original_question: string;
+  understood_conditions: string[];
+  pending_criterion: { id: string; label: string };
+  prompt: string;
+  actions: ConfirmAction[];
+  answer_max_length: number;
+  session: ConfirmSession;
+}
+
+/** `/v1/search` JSON 의 확인 대기 응답. SearchResponse 와는 `kind` 로 구분한다. */
+export interface ConfirmationRequiredResponse {
+  kind: "confirmation_required";
+  confirmation: ConfirmationRequired;
+}
+
+/** 최초 검색(JSON)의 결과: 완성 응답 또는 확인 대기. */
+export type SearchResult = SearchResponse | ConfirmationRequiredResponse;
+
+export function isConfirmationRequired(
+  result: SearchResult,
+): result is ConfirmationRequiredResponse {
+  return "kind" in result;
+}
+
+/** `POST /v1/search/confirm` 요청. 본문은 session_id·version·action·answer, 헤더는 두 값뿐이다. */
+export interface ConfirmRequest {
+  /** 사용자의 제출 한 번에 하나. 전송 결과를 모를 때 같은 값으로 다시 보낸다. */
+  idempotencyKey: string;
+  sessionId: string;
+  /** X-Session-Secret 헤더로만 보낸다. */
+  secret: string;
+  version: number;
+  action: ConfirmAction;
+  answer: string;
+}
+
 export interface SearchApi {
-  search(question: string, signal?: AbortSignal): Promise<SearchResponse>;
+  /**
+   * `POST /v1/search`. `runKey`는 최초 검색 실행 하나를 가리키는 Idempotency-Key 다. 같은 실행의 스트림 재시도·
+   * JSON 대체는 같은 값을, 새 질문·새 실행은 새 값을 쓴다. 기준 확인이 필요하면 ConfirmationRequiredResponse 를 준다.
+   */
+  search(
+    question: string,
+    signal?: AbortSignal,
+    runKey?: string,
+  ): Promise<SearchResult>;
+  /**
+   * `POST /v1/search/confirm`. 답은 원 질문에 붙이지 않고 세션으로 보낸다. 오류는 ApiError 로 던진다
+   * (409 turn_in_progress 는 retryAfter 를 담는다). 응답의 question 이 원 질문인지는 호출한 쪽이 본다.
+   */
+  confirm(
+    request: ConfirmRequest,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>;
   getProduct(
     domain: string,
     productId: string,
@@ -489,7 +563,8 @@ export interface SearchApi {
    */
   explain(body: ExplainRequest, signal?: AbortSignal): Promise<ExplainResponse>;
   /**
-   * `POST /v1/search/stream`. 검사를 마친 이벤트를 도착 순서대로 낸다. 마지막은 `done`이다.
+   * `POST /v1/search/stream`. 검사를 마친 이벤트를 도착 순서대로 낸다. 마지막은 `done`이거나, 기준 확인이
+   * 필요하면 `confirmation_required`다(이것도 정상 종료이며 끊김이 아니다).
    * - 스트림을 열기 전 오류(422·429·504 등)와 `error` 이벤트는 ApiError로 던진다.
    * - 스트림을 쓸 수 없으면(비 SSE 응답·열기 전 연결 실패·5xx) StreamUnavailableError를 던진다.
    * - 연결이 done·error 없이 끊기면 StreamCutError를 던진다.
@@ -498,6 +573,7 @@ export interface SearchApi {
   searchStream(
     question: string,
     signal?: AbortSignal,
+    runKey?: string,
   ): AsyncIterable<StreamEvent>;
 }
 
@@ -523,6 +599,12 @@ export class StreamCutError extends Error {
  * "http_<status>"다. 성공 응답 본문이 계약과 다르면
  * code="invalid_response", 연결 자체가 안 되면 status=0·code="network".
  */
+/**
+ * 열린 SSE 의 `turn_in_progress` error 이벤트에는 Retry-After 헤더가 없다. 계약이 정한 고정 대기(초)이며,
+ * 일반 HTTP 409 도 헤더가 빠졌을 때 같은 값을 쓴다.
+ */
+export const IN_PROGRESS_RETRY_SECONDS = 2;
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -533,6 +615,16 @@ export class ApiError extends Error {
     super(code);
     this.name = "ApiError";
   }
+}
+
+/** 409 중 이 화면이 아는 code 인가. 모르는 409 는 일반 오류로 둔다(처리 중으로 추측하지 않는다). */
+export function isSearchConflict(error: ApiError): boolean {
+  return (
+    error.status === 409 &&
+    (error.code === "turn_in_progress" ||
+      error.code === "session_conflict" ||
+      error.code === "turn_indeterminate")
+  );
 }
 
 /** 정리(공백·전각 반각화) 뒤 질문 길이 상한. 입력창도 이 길이까지 받는다. */
@@ -548,6 +640,7 @@ export const SUGGESTIONS_MAX = 3;
  * `POST /v1/search/stream` 이벤트. 순서: start → interpretation → results → answer_delta(0개 이상)
  * → answer_done → suggestions → done. 실패하면 그 자리에서 error 한 번 보내고 닫는다.
  * done 의 response 는 `/v1/search` 응답과 같은 스키마이고, 웹은 이것으로 화면을 최종 확정한다.
+ * 기준 확인이 필요하면 start → (interpretation) → confirmation_required 로 done 없이 정상 종료한다.
  */
 export const STREAM_EVENT_NAMES = [
   "start",
@@ -557,6 +650,7 @@ export const STREAM_EVENT_NAMES = [
   "answer_done",
   "suggestions",
   "done",
+  "confirmation_required",
   "error",
 ] as const;
 export type StreamEventName = (typeof STREAM_EVENT_NAMES)[number];
@@ -605,4 +699,5 @@ export type StreamEvent =
   | { event: "answer_done"; data: StreamAnswerDone }
   | { event: "suggestions"; data: StreamSuggestions }
   | { event: "done"; data: StreamDone }
+  | { event: "confirmation_required"; data: ConfirmationRequired }
   | { event: "error"; data: ErrorBody };

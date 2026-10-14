@@ -17,14 +17,19 @@ import {
   PRODUCT_FIXTURES,
   STREAM_FIXTURES,
   type StreamFixtureEvent,
+  confirmationRequired,
+  confirmationResponse,
 } from "./lib/fixtures";
 import type { ExplainResponse, SearchResponse } from "./lib/types";
 import {
+  ContractError,
+  validateConfirmationRequired,
   validateErrorBody,
   validateExplainResponse,
   validateMeta,
   validateProductDetail,
   validateSearchResponse,
+  validateSearchResult,
   validateStream,
 } from "./lib/validate";
 
@@ -41,11 +46,11 @@ const CONTRACT_PATH = resolve(root, "contract/public-api-v1.openapi.yaml");
 const spec = parse(readFileSync(CONTRACT_PATH, "utf8"));
 
 /**
- * 1.4.0 정본의 sha256. mafest `tests/contract/` 사본은 이 파일과 바이트 단위로 같아야 하고 같은 값을 고정한다.
+ * 1.5.0 정본의 sha256. mafest `tests/contract/` 사본은 이 파일과 바이트 단위로 같아야 하고 같은 값을 고정한다.
  * 계약을 바꾸면 두 곳을 함께 바꾼다.
  */
 const CONTRACT_SHA256 =
-  "40f57f508e80d85565da20f5c357d69319caf7a22ff29e8d397934d16d858150";
+  "1827bfd9fb9e036055bdaaa6ed5616e06b58cd082216221607b4c2b7942e5f99";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 ajv.addSchema({ ...spec, $id: "spec" });
@@ -394,6 +399,7 @@ const STREAM_SCHEMA: Record<string, string> = {
   answer_done: "StreamAnswerDone",
   suggestions: "StreamSuggestions",
   done: "StreamDone",
+  confirmation_required: "ConfirmationRequired",
   error: "ErrorBody",
 };
 
@@ -599,12 +605,132 @@ describe("explain contract", () => {
   });
 });
 
+describe("기준 확인 계약 1.5.0", () => {
+  /** /v1/search 200 응답 스키마(oneOf)를 yaml 경로 그대로 쓴다. */
+  const searchBody = ajv.compile({
+    $ref: "spec#/paths/~1v1~1search/post/responses/200/content/application~1json/schema",
+  });
+  const accepts = (value: unknown) => searchBody(value) === true;
+
+  const mutate = (change: (c: Record<string, unknown>) => void) => {
+    const copy = structuredClone(confirmationRequired) as unknown as Record<
+      string,
+      unknown
+    >;
+    change(copy);
+    return copy;
+  };
+  const session = (c: Record<string, unknown>) =>
+    c.session as Record<string, unknown>;
+
+  test("확인 대기 픽스처가 명세와 웹 검사기를 모두 통과한다", () => {
+    expect(check("ConfirmationRequired", confirmationRequired)).toEqual([]);
+    expect(check("ConfirmationRequiredResponse", confirmationResponse)).toEqual(
+      [],
+    );
+    expect(accepts(confirmationResponse)).toBe(true);
+    expect(accepts(answered)).toBe(true);
+    expect(() =>
+      validateConfirmationRequired(confirmationRequired),
+    ).not.toThrow();
+    expect(validateSearchResult(structuredClone(confirmationResponse))).toEqual(
+      confirmationResponse,
+    );
+  });
+
+  // 같은 깨진 확인 대기를 명세(Ajv)와 웹 검사기가 둘 다 거절해야 한다.
+  const broken: [string, Record<string, unknown>][] = [
+    ["session.secret 이 없다", mutate((c) => delete session(c).secret)],
+    ["모르는 키가 있다", mutate((c) => (c.default_answer = "x"))],
+    [
+      "기본 기준으로 계속하는 동작",
+      mutate((c) => (c.actions = ["use_default"])),
+    ],
+    ["동작이 비었다", mutate((c) => (c.actions = []))],
+    ["답변 상한이 200 을 넘는다", mutate((c) => (c.answer_max_length = 201))],
+    [
+      "expires_at 에 시간대가 없다",
+      mutate((c) => (session(c).expires_at = "2030-01-01T00:10:00")),
+    ],
+    ["세션 id 가 너무 짧다", mutate((c) => (session(c).id = "short"))],
+    ["확인 문구가 비었다", mutate((c) => (c.prompt = ""))],
+  ];
+
+  test.each(broken)(
+    "깨진 확인 대기(%s)는 명세와 웹 검사기가 함께 거절한다",
+    (_, input) => {
+      expect(check("ConfirmationRequired", input)).not.toEqual([]);
+      expect(() => validateConfirmationRequired(input)).toThrow(ContractError);
+    },
+  );
+
+  test("SearchResponse 와 확인 대기를 섞은 본문은 둘 다 거절한다", () => {
+    const mixed = { ...answered, kind: "confirmation_required" };
+    expect(accepts(mixed)).toBe(false);
+    expect(() => validateSearchResult(mixed)).toThrow();
+    const wrongKind = { kind: "done", confirmation: confirmationRequired };
+    expect(accepts(wrongKind)).toBe(false);
+    expect(() => validateSearchResult(wrongKind)).toThrow();
+  });
+
+  test("제출 본문: 승인된 필드만, 빈 답·200자 초과·모르는 동작은 거절한다", () => {
+    const ok = {
+      session_id: confirmationRequired.session.id,
+      version: 1,
+      action: "answer_text",
+      answer: "변동성이 낮은 것",
+    };
+    expect(check("ConfirmRequest", ok)).toEqual([]);
+    expect(
+      check("ConfirmRequest", { ...ok, answer: "가".repeat(200) }),
+    ).toEqual([]);
+    for (const bad of [
+      { ...ok, answer: "   " },
+      { ...ok, answer: "가".repeat(201) },
+      { ...ok, action: "use_default" },
+      { ...ok, question: "원 질문" },
+      { session_id: ok.session_id, version: 1, action: "answer_text" },
+    ])
+      expect(check("ConfirmRequest", bad), JSON.stringify(bad)).not.toEqual([]);
+  });
+
+  test("ErrorBody 는 확인·409 오류 code 를 받는다", () => {
+    for (const code of [
+      "session_expired",
+      "session_conflict",
+      "turn_in_progress",
+      "turn_indeterminate",
+      "confirm_unsupported",
+    ]) {
+      const body = { code, message: "x", request_id: "r-1" };
+      expect(check("ErrorBody", body), code).toEqual([]);
+      expect(() => validateErrorBody(body), code).not.toThrow();
+    }
+  });
+
+  test("스트림 순서: start 뒤(또는 interpretation 뒤)의 확인 대기만 done 없이 끝난다", () => {
+    const [start, confirmation] = STREAM_FIXTURES.confirmation;
+    const answeredStream = STREAM_FIXTURES.answered;
+    expect(() => validateStream([start, confirmation])).not.toThrow();
+    expect(() =>
+      validateStream([start, answeredStream[1], confirmation]),
+    ).not.toThrow();
+    for (const events of [
+      [confirmation],
+      [start, confirmation, answeredStream[answeredStream.length - 1]],
+      [start, answeredStream[1], answeredStream[2], confirmation],
+      [start],
+    ])
+      expect(() => validateStream(events)).toThrow(ContractError);
+  });
+});
+
 describe("contract pin", () => {
-  test("canonical yaml keeps the frozen 1.4.0 sha256", () => {
+  test("canonical yaml keeps the frozen 1.5.0 sha256", () => {
     const digest = createHash("sha256")
       .update(readFileSync(CONTRACT_PATH))
       .digest("hex");
     expect(digest).toBe(CONTRACT_SHA256);
-    expect(spec.info.version).toBe("1.4.0");
+    expect(spec.info.version).toBe("1.5.0");
   });
 });

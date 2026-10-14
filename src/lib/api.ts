@@ -3,9 +3,11 @@ import {
   ApiError,
   StreamCutError,
   StreamUnavailableError,
+  type ConfirmRequest,
   type ErrorBody,
   type SearchApi,
   type StreamEvent,
+  IN_PROGRESS_RETRY_SECONDS,
 } from "./types";
 import {
   ContractError,
@@ -14,6 +16,7 @@ import {
   validateMeta,
   validateProductDetail,
   validateSearchResponse,
+  validateSearchResult,
   validateStream,
   validateStreamEvent,
 } from "./validate";
@@ -59,6 +62,11 @@ function appErrorBody(body: unknown): ErrorBody | null {
   }
 }
 
+/** 최초 검색 실행 키가 있으면 Idempotency-Key 헤더로 보낸다. */
+function runKeyHeader(runKey: string | undefined): Record<string, string> {
+  return runKey === undefined ? {} : { "Idempotency-Key": runKey };
+}
+
 async function request(
   path: string,
   init: RequestInit,
@@ -94,10 +102,19 @@ function fail(response: Response, body: unknown): never {
   // Traefik이 직접 낸 504는 ErrorBody가 아닐 수 있지만 화면 의미는 같다.
   if (response.status === 504)
     throw new ApiError(504, "timeout", null, requestId);
+  // 409 turn_in_progress 는 Retry-After(초) 뒤에 같은 키로 수동 재전송하라는 뜻이다.
+  // 헤더가 빠진 turn_in_progress 는 계약의 고정 대기를 쓴다. 다른 409 에는 대기 개념이 없다.
+  const retryAfter =
+    response.status !== 409
+      ? null
+      : (parseRetryAfter(response.headers.get("Retry-After")) ??
+        (appError?.code === "turn_in_progress"
+          ? IN_PROGRESS_RETRY_SECONDS
+          : null));
   throw new ApiError(
     response.status,
     appError?.code ?? `http_${response.status}`,
-    null,
+    retryAfter,
     requestId,
   );
 }
@@ -139,9 +156,33 @@ function streamUnavailable(status: number): boolean {
   return status === 404 || (status >= 500 && status !== 504);
 }
 
+/**
+ * SSE error 이벤트를 HTTP 와 같은 ApiError 로 옮긴다. 이벤트에는 상태 코드와 헤더가 없으므로 code 로 정한다.
+ * 409 세 가지는 409 의미로, timeout 은 504, 그 밖은 500 이다. 모르는 code 를 "처리 중"으로 추측하지 않는다.
+ */
+function streamError(body: ErrorBody): ApiError {
+  switch (body.code) {
+    case "turn_in_progress":
+      return new ApiError(
+        409,
+        body.code,
+        IN_PROGRESS_RETRY_SECONDS,
+        body.request_id,
+      );
+    case "session_conflict":
+    case "turn_indeterminate":
+      return new ApiError(409, body.code, null, body.request_id);
+    case "timeout":
+      return new ApiError(504, body.code, null, body.request_id);
+    default:
+      return new ApiError(500, body.code, null, body.request_id);
+  }
+}
+
 async function* openStream(
   question: string,
   signal: AbortSignal | undefined,
+  runKey: string | undefined,
 ): AsyncGenerator<StreamEvent, void, undefined> {
   let response: Response;
   try {
@@ -150,6 +191,7 @@ async function* openStream(
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
+        ...runKeyHeader(runKey),
       },
       body: JSON.stringify({ question }),
       signal,
@@ -180,15 +222,10 @@ async function* openStream(
       const event = validateStreamEvent(raw.event, raw.data, mappings);
       if (event.event === "interpretation")
         mappings = event.data.interpretation.mappings;
-      if (event.event === "error") {
-        throw new ApiError(
-          event.data.code === "timeout" ? 504 : 500,
-          event.data.code,
-          null,
-          event.data.request_id,
-        );
-      }
-      if (event.event === "done") {
+      if (event.event === "error") throw streamError(event.data);
+      if (event.event === "done" || event.event === "confirmation_required") {
+        // confirmation_required 도 done 처럼 스트림의 정상 종료다. 끊김으로 보면 자동 재시도가 같은 질문을
+        // 다시 해석하게 된다.
         yield event;
         // 서버가 소켓을 늦게 닫아도 화면 확정을 기다리지 않는다. return으로 안쪽
         // parseSse 반복을 닫으면 그 finally가 reader.cancel()을 수행한다.
@@ -209,14 +246,14 @@ async function* openStream(
 }
 
 export const httpApi: SearchApi = {
-  searchStream(question, signal) {
-    return openStream(question, signal);
+  searchStream(question, signal, runKey) {
+    return openStream(question, signal, runKey);
   },
 
-  async search(question, signal) {
+  async search(question, signal, runKey) {
     const { response, body } = await request("/v1/search", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...runKeyHeader(runKey) },
       body: JSON.stringify({ question }),
       signal,
     });
@@ -232,6 +269,27 @@ export const httpApi: SearchApi = {
       }
       fail(response, body);
     }
+    return checked(validateSearchResult, body);
+  },
+
+  async confirm(submission: ConfirmRequest, signal) {
+    // 세션 secret 은 헤더로만, 본문에는 세션 id·버전·동작·답만 보낸다. 내부 계획·읽은 조건은 보내지 않는다.
+    const { response, body } = await request("/v1/search/confirm", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": submission.idempotencyKey,
+        "X-Session-Secret": submission.secret,
+      },
+      body: JSON.stringify({
+        session_id: submission.sessionId,
+        version: submission.version,
+        action: submission.action,
+        answer: submission.answer,
+      }),
+      signal,
+    });
+    if (!response.ok) fail(response, body);
     return checked(validateSearchResponse, body);
   },
 

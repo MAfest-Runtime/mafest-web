@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
@@ -5,7 +6,11 @@ import { vi } from "vitest";
 import App from "../App";
 import { streamEventsFor } from "../lib/fixtures";
 import { createMockApi } from "../lib/mockApi";
-import type { SearchApi, StreamEvent } from "../lib/types";
+import {
+  isConfirmationRequired,
+  type SearchApi,
+  type StreamEvent,
+} from "../lib/types";
 import { LocationProbe } from "./LocationProbe";
 
 /**
@@ -16,6 +21,7 @@ export function testApi(overrides: Partial<SearchApi> = {}): SearchApi {
   const mock = createMockApi(0);
   return {
     search: vi.fn(mock.search),
+    confirm: vi.fn(mock.confirm),
     getProduct: vi.fn(mock.getProduct),
     getMeta: vi.fn(mock.getMeta),
     explain: vi.fn(mock.explain),
@@ -33,8 +39,12 @@ export function testApi(overrides: Partial<SearchApi> = {}): SearchApi {
 export function streamFromSearch(
   search: SearchApi["search"],
 ): SearchApi["searchStream"] {
-  return async function* (question, signal) {
-    const response = await search(question, signal);
+  return async function* (question, signal, runKey) {
+    const response = await search(question, signal, runKey);
+    if (isConfirmationRequired(response)) {
+      yield { event: "confirmation_required", data: response.confirmation };
+      return;
+    }
     for (const item of streamEventsFor(response))
       yield item as unknown as StreamEvent;
   };
@@ -43,14 +53,20 @@ export function streamFromSearch(
 export function renderApp({
   api = testApi(),
   path = "/",
-}: { api?: SearchApi; path?: string } = {}) {
+  strict = false,
+}: {
+  api?: SearchApi;
+  path?: string;
+  strict?: boolean;
+} = {}) {
   const user = userEvent.setup();
-  const { unmount } = render(
+  const tree = (
     <MemoryRouter initialEntries={[path]}>
       <App api={api} />
       <LocationProbe />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const { unmount } = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   return { user, api, unmount };
 }
 
