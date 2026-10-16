@@ -365,3 +365,29 @@ describe("최초 검색의 409", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("확인 제출의 5xx 본문", () => {
+  const submission = {
+    idempotencyKey: "k-1",
+    sessionId: "s-1",
+    secret: "secret-value-000000",
+    version: 1,
+    action: "answer_text" as const,
+    answer: "답",
+  };
+
+  test("계약을 지킨 outcome=error 본문은 오류 결과로 돌려준다", async () => {
+    respond(500, errorOutcome);
+    const result = await httpApi.confirm(submission);
+    expect(result).toMatchObject({ outcome: "error" });
+  });
+
+  test("504 와 계약 밖 5xx 본문은 오류로 던져 처리 결과 불명이 되게 한다", async () => {
+    // 504 는 본문이 유효한 오류 결과여도 불명으로 둔다.
+    respond(504, errorOutcome);
+    expect((await failure(httpApi.confirm(submission))).status).toBe(504);
+
+    respond(500, { detail: "boom" });
+    expect((await failure(httpApi.confirm(submission))).status).toBe(500);
+  });
+});

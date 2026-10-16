@@ -627,6 +627,15 @@ export function isSearchConflict(error: ApiError): boolean {
   );
 }
 
+/**
+ * 최초 검색이 "서버가 처리했는지 알 수 없는" 실패인가. 연결 오류·504·일반 5xx(계약 밖 본문 포함)다.
+ * 500 같은 숫자나 문구로 "확정된 실패"를 추측하지 않는다 — 확정은 계약 검증을 통과한 outcome="error" 본문뿐이다.
+ * 명시적인 4xx(422·404·429)와 409 종료 상태는 여기에 넣지 않는다.
+ */
+export function isSearchUnknown(error: ApiError): boolean {
+  return error.code === "network" || error.status >= 500;
+}
+
 /** 정리(공백·전각 반각화) 뒤 질문 길이 상한. 입력창도 이 길이까지 받는다. */
 export const QUESTION_MAX = 200;
 /** 정리하기 전 원래 질문 길이 상한(SearchRequest.question maxLength). */

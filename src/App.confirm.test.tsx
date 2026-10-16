@@ -120,9 +120,7 @@ describe("확인 대기 진입", () => {
     await screen.findByText("확인 시간이 지났습니다");
     const firstKey = vi.mocked(api.searchStream).mock.calls[0][2];
 
-    await user.click(
-      screen.getByRole("button", { name: "처음부터 다시 확인" }),
-    );
+    await user.click(screen.getByRole("button", { name: "새 검색으로 시작" }));
     await screen.findByText("안전하다는 기준은 어떤 뜻인가요?");
     const keys = vi.mocked(api.searchStream).mock.calls.map((c) => c[2]);
     expect(keys).toHaveLength(2);
@@ -231,10 +229,10 @@ describe("제출 실패", () => {
     const input = screen.getByLabelText("답변 입력");
     expect(input).toHaveValue("전송실패");
     expect(input).toHaveAttribute("readonly");
-    expect(screen.getByText(/취소됐다는 뜻도 아닙니다/)).toBeVisible();
+    expect(screen.getByText(/성공을 보장하지 않습니다/)).toBeVisible();
 
     await user.click(
-      screen.getByRole("button", { name: "같은 요청 다시 보내기" }),
+      screen.getByRole("button", { name: "같은 요청으로 확인" }),
     );
     await screen.findByRole(RESUMED, { name: RESUMED_NAME });
     const [first, second] = requestsOf(api);
@@ -252,13 +250,15 @@ describe("제출 실패", () => {
     });
     await answerWith(user, "답");
 
-    expect(await screen.findByText(/아직 처리하고 있습니다/)).toBeVisible();
+    expect(
+      await screen.findByText(/기존 요청을 처리하고 있습니다/),
+    ).toBeVisible();
     // 자동으로 다시 보내지 않는다.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(confirm).toHaveBeenCalledTimes(1);
 
     await user.click(
-      screen.getByRole("button", { name: "같은 요청 다시 보내기" }),
+      screen.getByRole("button", { name: "같은 요청으로 확인" }),
     );
     await screen.findByRole(RESUMED, { name: RESUMED_NAME });
     expect(confirm.mock.calls[1][0]).toEqual(confirm.mock.calls[0][0]);
@@ -289,7 +289,7 @@ describe("제출 실패", () => {
       expect(api.confirm).toHaveBeenCalledTimes(1);
       if (error.code === "confirm_unsupported")
         expect(
-          screen.queryByRole("button", { name: "처음부터 다시 확인" }),
+          screen.queryByRole("button", { name: "새 검색으로 시작" }),
         ).toBeNull();
     },
   );
@@ -300,7 +300,7 @@ describe("제출 실패", () => {
     });
     await answerWith(user, "답");
     expect(
-      await screen.findByRole("button", { name: "같은 요청 다시 보내기" }),
+      await screen.findByRole("button", { name: "같은 요청으로 확인" }),
     ).toBeVisible();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(api.confirm).toHaveBeenCalledTimes(1);

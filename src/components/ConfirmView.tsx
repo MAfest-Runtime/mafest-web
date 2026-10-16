@@ -70,17 +70,15 @@ export function ConfirmView({
         <div className="banner banner--warn" role="alert">
           <Icon name="refresh" size={16} />
           <span>
-            답을 보냈지만 서버가 받았는지 확인하지 못했습니다. 아래에 보낸 답을
-            같은 요청으로 다시 보낼 수 있습니다. 답을 바꿔 보내는 것이 아니며,
-            이전 요청이 취소됐다는 뜻도 아닙니다. 서버가 이미 처리했다면 같은
-            결과를 한 번만 돌려받습니다.
+            처리 결과를 확인하지 못했습니다. 같은 요청으로 다시 확인할 수
+            있지만, 결과 확인이나 성공을 보장하지 않습니다.
           </span>
           <button
             type="button"
             className="button button--small"
             onClick={onResend}
           >
-            같은 요청 다시 보내기
+            같은 요청으로 확인
           </button>
         </div>
       )}
@@ -162,9 +160,8 @@ function InProgressNotice({
     <div className="banner banner--warn" role="status">
       <Icon name="refresh" size={16} />
       <span>
-        보낸 답을 서버가 아직 처리하고 있습니다.
-        {left > 0 ? ` ${left}초 뒤에` : " 지금"} 같은 요청을 다시 보낼 수
-        있습니다. 자동으로 다시 보내지 않습니다.
+        기존 요청을 처리하고 있습니다. {left > 0 ? `${left}초 뒤에` : "잠시 뒤"}{" "}
+        같은 요청으로 상태를 확인할 수 있습니다. 새로 해석하지 않습니다.
       </span>
       <button
         type="button"
@@ -172,7 +169,7 @@ function InProgressNotice({
         disabled={left > 0}
         onClick={onResend}
       >
-        같은 요청 다시 보내기
+        같은 요청으로 확인
       </button>
     </div>
   );
@@ -181,15 +178,15 @@ function InProgressNotice({
 const END_MESSAGES: Record<EndReason, { title: string; body: string }> = {
   expired: {
     title: "확인 시간이 지났습니다",
-    body: "확인 내용이 만료됐습니다. 처음부터 다시 확인하면 새 검색으로 시작하며, 이전에 보낸 답은 이어지지 않습니다.",
+    body: "확인 내용이 만료됐습니다. 새 검색으로 시작하면 이전에 보낸 답은 이어지지 않습니다.",
   },
   conflict: {
     title: "확인 내용이 바뀌었습니다",
-    body: "다른 곳에서 이미 처리됐을 수 있습니다. 처음부터 다시 확인하면 새 검색으로 시작합니다.",
+    body: "다른 곳에서 이미 처리됐을 수 있습니다. 새 검색으로 시작해 주세요.",
   },
   indeterminate: {
-    title: "이 요청은 이어갈 수 없습니다",
-    body: "새 검색으로 시작해 주세요. 같은 요청을 다시 보내도 처리 결과를 알 수 없습니다.",
+    title: "이 요청은 더 이어갈 수 없습니다",
+    body: "새 검색으로 시작해 주세요.",
   },
   unsupported: {
     title: "기준 확인을 지원하지 않습니다",
@@ -197,7 +194,7 @@ const END_MESSAGES: Record<EndReason, { title: string; body: string }> = {
   },
   failed: {
     title: "답변을 처리하지 못했습니다",
-    body: "서버 응답을 확인할 수 없었습니다. 처음부터 다시 확인하거나 질문을 다시 써 주세요.",
+    body: "서버 응답을 확인할 수 없었습니다. 새 검색으로 시작하거나 질문을 다시 써 주세요.",
   },
 };
 
@@ -219,7 +216,7 @@ export function ConfirmEnded({
       <div className="confirm__actions">
         {reason !== "unsupported" && (
           <button type="button" className="button" onClick={onRestart}>
-            처음부터 다시 확인
+            새 검색으로 시작
           </button>
         )}
         <button type="button" className="button" onClick={onRewrite}>

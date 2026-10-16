@@ -94,7 +94,7 @@ describe("broken streams go to the error screen", () => {
       await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 5);
     });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "서버에 연결할 수 없습니다",
+      "처리 결과를 확인하지 못했습니다",
     );
     expect(searchCalls()).toEqual(["/v1/search/stream", "/v1/search/stream"]);
   });

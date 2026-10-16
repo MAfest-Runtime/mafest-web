@@ -9,6 +9,7 @@ import {
   RequestFailed,
   RetryingNotice,
   SearchConflict,
+  SearchUnknown,
   SearchLoading,
 } from "../components/StatusViews";
 import { useConfirmSubmit } from "../lib/useConfirmSubmit";
@@ -17,6 +18,7 @@ import { provisionalResponse, streamPhase } from "../lib/searchStream";
 import {
   ApiError,
   isSearchConflict,
+  isSearchUnknown,
   QUESTION_MAX,
   type SearchApi,
 } from "../lib/types";
@@ -138,9 +140,18 @@ export function SearchRoute({ api }: { api: SearchApi }) {
               onNewSearch={retry}
             />
           )}
-          {state.status === "failed" && !isSearchConflict(state.error) && (
-            <RequestFailed error={state.error} onRetry={retry} />
+          {state.status === "failed" && isSearchUnknown(state.error) && (
+            <SearchUnknown
+              key={`${question}-${state.error.code}`}
+              error={state.error}
+              onResend={resend}
+            />
           )}
+          {state.status === "failed" &&
+            !isSearchConflict(state.error) &&
+            !isSearchUnknown(state.error) && (
+              <RequestFailed error={state.error} onRetry={retry} />
+            )}
           {state.status === "streaming" &&
             state.view.retrying &&
             shown !== null && <RetryingNotice />}

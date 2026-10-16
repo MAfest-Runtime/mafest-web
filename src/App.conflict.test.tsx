@@ -1,6 +1,6 @@
 import { act, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { answered } from "./lib/fixtures";
+import { answered, errorOutcome } from "./lib/fixtures";
 import { ApiError, type SearchApi } from "./lib/types";
 import { renderApp, searchPath, testApi } from "./test/renderApp";
 
@@ -10,7 +10,8 @@ import { renderApp, searchPath, testApi } from "./test/renderApp";
  */
 
 const QUESTION = "순자산 큰 국내 ETF 5개";
-const RESEND = { name: "같은 요청 다시 보내기" };
+const RESEND = { name: "같은 요청으로 확인" };
+const NEW_SEARCH = { name: "새 검색으로 시작" };
 
 function inProgress(retryAfter: number | null) {
   return new ApiError(409, "turn_in_progress", retryAfter, "r-409");
@@ -97,7 +98,7 @@ describe("최초 검색의 409", () => {
   });
 
   test.each([
-    ["turn_indeterminate", "이 요청은 이어갈 수 없습니다"],
+    ["turn_indeterminate", "이 요청은 더 이어갈 수 없습니다"],
     ["session_conflict", "요청이 충돌했습니다"],
   ])(
     "%s: 재전송 없이 종료하고, 새 검색은 새 키를 쓴다",
@@ -171,12 +172,12 @@ describe("확인 답변 제출의 409", () => {
 
     await submitAnswer(user, "하락장에서 덜 빠지는 것");
     expect(
-      await screen.findByText("이 요청은 이어갈 수 없습니다"),
+      await screen.findByText("이 요청은 더 이어갈 수 없습니다"),
     ).toBeVisible();
     expect(screen.queryByLabelText("답변 입력")).toBeNull();
     expect(screen.queryByRole("button", RESEND)).toBeNull();
     expect(
-      screen.getByRole("button", { name: "처음부터 다시 확인" }),
+      screen.getByRole("button", { name: "새 검색으로 시작" }),
     ).toBeVisible();
     expect(confirm).toHaveBeenCalledTimes(1);
   });
@@ -194,7 +195,7 @@ describe("확인 답변 제출의 409", () => {
     });
 
     await submitAnswer(user, "하락장에서 덜 빠지는 것");
-    await screen.findByText(/서버가 아직 처리하고 있습니다/);
+    await screen.findByText(/기존 요청을 처리하고 있습니다/);
     const button = screen.getByRole("button", RESEND);
     expect(button).toBeDisabled();
     await advance(1500);
@@ -204,5 +205,116 @@ describe("확인 답변 제출의 409", () => {
 
     const [first, second] = confirm.mock.calls.map((call) => call[0]);
     expect(second).toEqual(first);
+  });
+});
+
+describe("처리 결과 불명과 확정된 오류 결과", () => {
+  test.each([
+    ["네트워크 오류", new ApiError(0, "network")],
+    ["일반 500", new ApiError(500, "internal", null, "r-500")],
+    ["504", new ApiError(504, "timeout", null, "r-504")],
+  ])(
+    "최초 검색 %s: 불명 화면에서 자동 재전송 없이, 누르면 같은 질문·같은 키로 확인한다",
+    async (_name, error) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const search = vi
+        .fn<SearchApi["search"]>()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue(answered);
+      const api = testApi({ search });
+      renderApp({ api, path: searchPath(QUESTION) });
+
+      expect(
+        await screen.findByText("처리 결과를 확인하지 못했습니다"),
+      ).toBeVisible();
+      await advance(5000);
+      expect(search).toHaveBeenCalledTimes(1);
+
+      await act(async () => screen.getByRole("button", RESEND).click());
+      await screen.findByRole("navigation", { name: "이어서 물어볼 질문" });
+      const [first, second] = vi.mocked(search).mock.calls;
+      expect(second[0]).toBe(first[0]);
+      expect(first[2]).toBeTruthy();
+      expect(second[2]).toBe(first[2]);
+    },
+  );
+
+  test("최초 검색의 유효한 오류 결과: 새 검색으로 시작만 있고, 새 키를 쓴다", async () => {
+    const search = vi
+      .fn<SearchApi["search"]>()
+      .mockResolvedValueOnce({ ...errorOutcome, question: QUESTION })
+      .mockResolvedValue(answered);
+    const { user } = renderApp({
+      api: testApi({ search }),
+      path: searchPath(QUESTION),
+    });
+
+    expect(
+      await screen.findByText(/요청 처리 중 오류가 발생했습니다/),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", RESEND)).toBeNull();
+    await user.click(screen.getByRole("button", NEW_SEARCH));
+    await screen.findByRole("navigation", { name: "이어서 물어볼 질문" });
+    const keys = keysOf(search);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  describe("확인 제출", () => {
+    const CONFIRM_QUESTION = "안전한 국내 ETF 5개 보여줘";
+
+    async function submitAnswer(user: ReturnType<typeof renderApp>["user"]) {
+      await user.type(await screen.findByLabelText("답변 입력"), "낮은 변동성");
+      await user.click(screen.getByRole("button", { name: "답변 보내기" }));
+    }
+
+    test("유효한 오류 결과는 오류 화면이고 같은 요청 재전송이 없다", async () => {
+      const base = testApi();
+      const confirm = vi
+        .fn<SearchApi["confirm"]>()
+        .mockResolvedValue({ ...errorOutcome, question: CONFIRM_QUESTION });
+      const { user } = renderApp({
+        api: { ...base, confirm },
+        path: searchPath(CONFIRM_QUESTION),
+      });
+      await submitAnswer(user);
+
+      expect(
+        await screen.findByText(/요청 처리 중 오류가 발생했습니다/),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", RESEND)).toBeNull();
+      expect(screen.getByRole("button", NEW_SEARCH)).toBeVisible();
+      expect(confirm).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      ["일반 500", new ApiError(500, "internal", null, "r-500")],
+      ["504", new ApiError(504, "timeout", null, "r-504")],
+    ])(
+      "%s 는 불명으로 두고, 자동 재전송 없이 누르면 같은 요청을 보낸다",
+      async (_name, error) => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const base = testApi();
+        const confirm = vi
+          .fn<SearchApi["confirm"]>()
+          .mockRejectedValueOnce(error)
+          .mockImplementation((request, signal) =>
+            base.confirm(request, signal),
+          );
+        const { user } = renderApp({
+          api: { ...base, confirm },
+          path: searchPath(CONFIRM_QUESTION),
+        });
+        await submitAnswer(user);
+
+        await screen.findByText(/처리 결과를 확인하지 못했습니다/);
+        await advance(5000);
+        expect(confirm).toHaveBeenCalledTimes(1);
+        await act(async () => screen.getByRole("button", RESEND).click());
+        await screen.findByRole("navigation", { name: "이어서 물어볼 질문" });
+        const [first, second] = confirm.mock.calls.map((call) => call[0]);
+        expect(second).toEqual(first);
+      },
+    );
   });
 });

@@ -6,6 +6,7 @@ import {
   type ConfirmRequest,
   type ErrorBody,
   type SearchApi,
+  type SearchResponse,
   type StreamEvent,
   IN_PROGRESS_RETRY_SECONDS,
 } from "./types";
@@ -245,6 +246,24 @@ async function* openStream(
   throw new StreamCutError();
 }
 
+/**
+ * 5xx(504 제외) 응답 본문이 계약을 지킨 SearchResponse(outcome="error")이면 돌려주고, 아니면 null.
+ * 이것을 받아도 서버가 DB에 저장까지 마쳤다는 뜻은 아니다.
+ */
+function validErrorOutcome(
+  status: number,
+  body: unknown,
+): SearchResponse | null {
+  if (status < 500 || status === 504) return null;
+  try {
+    const parsed = validateSearchResponse(body);
+    return parsed.outcome === "error" ? parsed : null;
+  } catch {
+    // 계약 밖 본문이면 호출한 쪽이 일반 HTTP 오류(처리 결과 불명)로 처리한다.
+    return null;
+  }
+}
+
 export const httpApi: SearchApi = {
   searchStream(question, signal, runKey) {
     return openStream(question, signal, runKey);
@@ -258,15 +277,9 @@ export const httpApi: SearchApi = {
       signal,
     });
     if (!response.ok) {
-      if (response.status >= 500 && response.status !== 504) {
-        // 계약을 지킨 error 응답이면 request_id와 trace를 살려 그대로 보여준다.
-        try {
-          const parsed = validateSearchResponse(body);
-          if (parsed.outcome === "error") return parsed;
-        } catch {
-          // 계약 밖 본문이면 아래의 일반 HTTP 오류로 처리한다.
-        }
-      }
+      // 계약을 지킨 error 응답이면 request_id와 trace를 살려 그대로 보여준다.
+      const errorResult = validErrorOutcome(response.status, body);
+      if (errorResult) return errorResult;
       fail(response, body);
     }
     return checked(validateSearchResult, body);
@@ -289,7 +302,13 @@ export const httpApi: SearchApi = {
       }),
       signal,
     });
-    if (!response.ok) fail(response, body);
+    if (!response.ok) {
+      // 최초 검색과 같은 원칙: 계약 검증을 통과한 outcome="error" 본문만 확정된 오류 결과로 받는다.
+      // 504·일반 5xx·계약 밖 본문은 fail() 로 가서 처리 결과 불명이 된다.
+      const errorResult = validErrorOutcome(response.status, body);
+      if (errorResult) return errorResult;
+      fail(response, body);
+    }
     return checked(validateSearchResponse, body);
   },
 
