@@ -176,7 +176,7 @@ docker cp "$container:/usr/share/nginx/html" "$workdir/site"
 bundle_rc=0
 # SAMPLE·DEMO·mock-는 합성 픽스처의 표식이다. 운영 번들(VITE_API_MODE=real)에서는
 # client.ts의 조건이 상수로 접혀 mock 모듈이 빠져야 한다.
-grep -rnE 'VITE_LOCAL_API_TARGET|127\.0\.0\.1:8000|SAMPLE 코스피200|mock-answered-' \
+grep -rnE 'VITE_LOCAL_API_TARGET|127\.0\.0\.1:8000|SAMPLE 코스피200|mock-answered-|mock-session|mock-secret|sample-session-' \
   "$workdir/site" || bundle_rc=$?
 case "$bundle_rc" in
   0)

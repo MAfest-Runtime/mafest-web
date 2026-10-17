@@ -317,12 +317,15 @@ function OutcomeBody({
           title="답변을 만들지 못했습니다"
           response={response}
         >
+          <p>
+            요청 처리 중 오류가 발생했습니다. 같은 요청을 다시 보내도 새로
+            해석하지 않습니다. 새 검색으로 시작해 주세요.
+          </p>
           <p className="muted small">
             요청 ID <span className="code">{response.request_id}</span>
           </p>
           <button type="button" className="secondary" onClick={onRetry}>
-            <Icon name="refresh" size={16} />
-            다시 시도
+            <Icon name="refresh" size={16} />새 검색으로 시작
           </button>
         </StateBox>
       );

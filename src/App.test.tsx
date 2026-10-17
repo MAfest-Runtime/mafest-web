@@ -558,9 +558,11 @@ describe("결과 — HTTP 실패와 로딩", () => {
       }),
       path: searchPath("q"),
     });
-    expect(await screen.findByText("시간이 초과됐습니다")).toBeVisible();
     expect(
-      screen.getByText("답을 만들지 못했습니다. 조건을 줄여 다시 물어보세요."),
+      await screen.findByText("처리 결과를 확인하지 못했습니다"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "같은 요청으로 확인" }),
     ).toBeVisible();
     expect(screen.queryByText(/30초/)).toBeNull();
   });

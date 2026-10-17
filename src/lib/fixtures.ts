@@ -2,6 +2,8 @@ import type {
   CellValue,
   Column,
   ConceptTopic,
+  ConfirmationRequired,
+  ConfirmationRequiredResponse,
   DomainKey,
   ExplainRequest,
   ExplainResponse,
@@ -1783,7 +1785,43 @@ const ANSWER_SENTENCES = [
   "그다음은 DEMO 미국S&P500(6.4조 원)과 SAMPLE 반도체TOP10(3.8조 원)입니다.",
 ];
 
+/**
+ * 기준 확인 대기의 합성 값. 세션 id·secret 은 지어낸 토큰이다(실제 값이 아니다). 계약 테스트가 이것을
+ * ConfirmationRequired 스키마로 검사하고, 화면·클라이언트 테스트가 확인 대기 응답으로 쓴다.
+ */
+export const confirmationRequired: ConfirmationRequired = {
+  original_question: "안전한 국내 ETF 5개 보여줘",
+  understood_conditions: ["국내 ETF", "5개"],
+  pending_criterion: { id: "safety", label: "안전" },
+  prompt: "안전하다는 기준은 어떤 뜻인가요?",
+  actions: ["answer_text"],
+  answer_max_length: 200,
+  session: {
+    id: "sample-session-0123456789abcdef",
+    secret: "sample-secret-fedcba9876543210",
+    version: 1,
+    expires_at: "2030-01-01T00:10:00Z",
+  },
+};
+
+/** `/v1/search` JSON 의 확인 대기 응답. */
+export const confirmationResponse: ConfirmationRequiredResponse = {
+  kind: "confirmation_required",
+  confirmation: confirmationRequired,
+};
+
 export const STREAM_FIXTURES: Record<string, StreamFixtureEvent[]> = {
+  // 기준 확인: start → confirmation_required 로 done 없이 정상 종료한다.
+  confirmation: [
+    {
+      event: "start",
+      data: {
+        request_id: "sample-confirm-start",
+        question: confirmationRequired.original_question,
+      },
+    },
+    { event: "confirmation_required", data: confirmationRequired },
+  ],
   answered: [
     ...streamHead(answered),
     ...ANSWER_SENTENCES.map((text, index) => ({

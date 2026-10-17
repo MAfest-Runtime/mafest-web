@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { httpApi } from "./api";
-import { answered, STREAM_FIXTURES, type StreamFixtureEvent } from "./fixtures";
+import {
+  answered,
+  confirmationRequired,
+  STREAM_FIXTURES,
+  type StreamFixtureEvent,
+} from "./fixtures";
 import { createMockApi } from "./mockApi";
 import {
   applyEvent,
@@ -264,6 +269,64 @@ describe("httpApi.searchStream", () => {
     );
   });
 
+  test("sends the run key as Idempotency-Key and nothing else identifying", async () => {
+    const fetchMock = stubFetch(sseResponse([encode(normal)]));
+    await collect(httpApi.searchStream("q", undefined, "run-key-abcdef-0001"));
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["Idempotency-Key"]).toBe("run-key-abcdef-0001");
+    expect(Object.keys(init.headers).sort()).toEqual([
+      "Accept",
+      "Content-Type",
+      "Idempotency-Key",
+    ]);
+  });
+
+  describe("confirmation_required", () => {
+    const confirmation = STREAM_FIXTURES.confirmation;
+
+    test("ends the stream normally without done and cancels the reader", async () => {
+      const stream = controlledSseResponse();
+      stubFetch(stream.response);
+      stream.push(new TextDecoder().decode(encode(confirmation)));
+
+      const events = await collect(httpApi.searchStream("q"));
+
+      expect(events.map((e) => e.event)).toEqual([
+        "start",
+        "confirmation_required",
+      ]);
+      expect(stream.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      ["results before it", [normal[0], normal[1], normal[2], confirmation[1]]],
+      [
+        "a session without secret",
+        [
+          confirmation[0],
+          {
+            event: "confirmation_required",
+            data: {
+              ...(confirmation[1].data as { session: object }),
+              session: {
+                id: "sample-session-0123456789abcdef",
+                version: 1,
+                expires_at: "2030-01-01T00:10:00Z",
+              },
+            },
+          },
+        ],
+      ],
+    ])("treats %s as an invalid response", async (_, events) => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      stubFetch(sseResponse([encode(events)]));
+      await expect(collect(httpApi.searchStream("q"))).rejects.toMatchObject({
+        status: 200,
+        code: "invalid_response",
+      });
+    });
+  });
+
   test("422 before the stream opens is a JSON error", async () => {
     stubFetch(
       new Response(
@@ -337,6 +400,30 @@ describe("httpApi.searchStream", () => {
         code,
         requestId: "r-err",
       });
+    },
+  );
+
+  test.each([
+    ["turn_in_progress", 2],
+    ["session_conflict", null],
+    ["turn_indeterminate", null],
+  ])(
+    "an error event %s is a 409; only turn_in_progress gets the fixed 2s wait",
+    async (code, retryAfter) => {
+      const head = normal.slice(0, 3);
+      const error = {
+        event: "error",
+        data: { code, message: "충돌", request_id: "r-409" },
+      };
+      const fetchMock = stubFetch(sseResponse([encode([...head, error])]));
+      await expect(collect(httpApi.searchStream("q"))).rejects.toMatchObject({
+        status: 409,
+        code,
+        retryAfter,
+        requestId: "r-409",
+      });
+      // 409 는 끊김이 아니므로 스트림을 다시 열지 않는다.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -522,9 +609,11 @@ describe("runSearchStream", () => {
       new AbortController().signal,
       (view) => views.push(view),
     );
-    expect(response).toBe(
-      (normalEvents.at(-1) as { data: { response: unknown } }).data.response,
-    );
+    expect(response).toEqual({
+      kind: "response",
+      response: (normalEvents.at(-1) as { data: { response: unknown } }).data
+        .response,
+    });
     expect(api.calls).toBe(1);
     expect(views.at(-1)?.sentences).toHaveLength(2);
   });
@@ -619,7 +708,7 @@ describe("runSearchStream", () => {
       new AbortController().signal,
       () => undefined,
     );
-    expect(response).toBe(answered);
+    expect(response).toEqual({ kind: "response", response: answered });
     expect(search).toHaveBeenCalledTimes(1);
     expect(api.calls).toBe(1);
   });
@@ -635,6 +724,67 @@ describe("runSearchStream", () => {
       runSearchStream(api, "q", new AbortController().signal, () => undefined),
     ).rejects.toMatchObject({ status: 429 });
     expect(search).not.toHaveBeenCalled();
+  });
+
+  describe("기준 확인 대기", () => {
+    const confirmation = confirmationRequired;
+
+    async function* confirmationStream(): AsyncGenerator<
+      StreamEvent,
+      void,
+      undefined
+    > {
+      yield normalEvents[0];
+      yield { event: "confirmation_required", data: confirmation };
+    }
+
+    test("confirmation_required 는 정상 종료라서 다시 요청하지 않고 결과를 확인 대기로 돌려준다", async () => {
+      const api = fakeApi([confirmationStream]);
+      const result = await runSearchStream(
+        api,
+        "q",
+        new AbortController().signal,
+        () => undefined,
+        undefined,
+        "run-key-1",
+      );
+      expect(result).toEqual({ kind: "confirmation", confirmation });
+      expect(api.calls).toBe(1);
+      expect(api.search).not.toHaveBeenCalled();
+    });
+
+    test("끊김 재시도와 JSON 대체는 같은 실행 키를 쓴다", async () => {
+      vi.useFakeTimers();
+      const search = vi.fn().mockResolvedValue({
+        kind: "confirmation_required",
+        confirmation,
+      });
+      async function* unavailable(): AsyncGenerator<
+        StreamEvent,
+        void,
+        undefined
+      > {
+        yield* [] as StreamEvent[];
+        throw new StreamUnavailableError();
+      }
+      const api = fakeApi([cutAfterFirstSentence, unavailable], search);
+      const promise = runSearchStream(
+        api,
+        "q",
+        new AbortController().signal,
+        () => undefined,
+        undefined,
+        "run-key-2",
+      );
+      await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+      // JSON 대체가 돌려준 확인 대기도 스트림 경로와 같은 모양으로 맞춰진다.
+      expect(await promise).toEqual({ kind: "confirmation", confirmation });
+      const streamKeys = vi
+        .mocked(api.searchStream)
+        .mock.calls.map((call) => (call as unknown[])[2]);
+      expect(streamKeys).toEqual(["run-key-2", "run-key-2"]);
+      expect(search.mock.calls[0][2]).toBe("run-key-2");
+    });
   });
 
   test("aborting during the retry wait stops without a second request", async () => {

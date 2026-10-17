@@ -3,11 +3,13 @@ import { httpApi } from "./api";
 import {
   answered,
   CONCEPT_TOPICS,
+  confirmationRequired,
+  confirmationResponse,
   errorOutcome,
   meta,
   PRODUCT_FIXTURES,
 } from "./fixtures";
-import { ApiError } from "./types";
+import { ApiError, type SearchResponse } from "./types";
 
 /*
  * 실제 api.ts + 가짜 fetch. 요청 형태와 실패 처리를 본다(서버 없음).
@@ -63,7 +65,9 @@ afterEach(() => {
 describe("search", () => {
   test("같은 origin /v1/search에 질문만 JSON으로 보낸다(인증 헤더 없음)", async () => {
     const fetchMock = respond(200, answered);
-    const result = await httpApi.search("순자산 큰 국내 ETF 5개");
+    const result = (await httpApi.search(
+      "순자산 큰 국내 ETF 5개",
+    )) as SearchResponse;
     expect(result.outcome).toBe("answered");
     const [path, init] = fetchMock.mock.calls[0];
     expect(path).toBe("/v1/search");
@@ -105,7 +109,7 @@ describe("search", () => {
 
   test("500이라도 계약을 지킨 error 응답이면 그대로 돌려준다", async () => {
     respond(500, errorOutcome);
-    const result = await httpApi.search("q");
+    const result = (await httpApi.search("q")) as SearchResponse;
     expect(result.outcome).toBe("error");
     expect(result.request_id).toBe(errorOutcome.request_id);
   });
@@ -145,6 +149,97 @@ describe("search", () => {
     );
     await expect(httpApi.search("q")).rejects.toMatchObject({
       name: "AbortError",
+    });
+  });
+});
+
+describe("search · 최초 실행 키와 확인 대기", () => {
+  test("실행 키는 Idempotency-Key 헤더로만 보낸다", async () => {
+    const fetchMock = respond(200, answered);
+    await httpApi.search("q", undefined, "run-key-abcdef-0001");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["Idempotency-Key"]).toBe("run-key-abcdef-0001");
+    expect(JSON.parse(init.body)).toEqual({ question: "q" });
+  });
+
+  test("확인 대기 응답은 오류나 성공 결과가 아니라 kind 로 구분해 돌려준다", async () => {
+    respond(200, confirmationResponse);
+    expect(await httpApi.search("q")).toEqual(confirmationResponse);
+  });
+
+  test("kind 가 있으면 SearchResponse 형식으로 섞어 통과시키지 않는다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    respond(200, { ...answered, kind: "confirmation_required" });
+    expect(await failure(httpApi.search("q"))).toMatchObject({
+      status: 200,
+      code: "invalid_response",
+    });
+  });
+});
+
+describe("confirm", () => {
+  const submission = {
+    idempotencyKey: "submit-key-abcdef-0001",
+    sessionId: confirmationRequired.session.id,
+    secret: confirmationRequired.session.secret,
+    version: confirmationRequired.session.version,
+    action: "answer_text" as const,
+    answer: "변동성이 낮은 것",
+  };
+
+  test("승인된 헤더와 본문 필드만 /v1/search/confirm 으로 보낸다", async () => {
+    const fetchMock = respond(200, answered);
+    await httpApi.confirm(submission);
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/v1/search/confirm");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      session_id: submission.sessionId,
+      version: 1,
+      action: "answer_text",
+      answer: "변동성이 낮은 것",
+    });
+    // 헤더: 키와 세션 secret 만 더한다(원 질문·읽은 조건·계획은 본문에도 없다).
+    expect(init.headers["Idempotency-Key"]).toBe(submission.idempotencyKey);
+    expect(init.headers["X-Session-Secret"]).toBe(submission.secret);
+    expect(JSON.stringify(init.body)).not.toContain(submission.secret);
+  });
+
+  test("성공 응답은 검색 응답 검증을 거친다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    respond(200, { ...answered, results: "broken" });
+    expect(await failure(httpApi.confirm(submission))).toMatchObject({
+      status: 200,
+      code: "invalid_response",
+    });
+  });
+
+  test.each([
+    [409, "turn_in_progress", { "Retry-After": "3" }, 3],
+    [409, "session_conflict", {}, null],
+    [410, "session_expired", {}, null],
+    [501, "confirm_unsupported", {}, null],
+  ])(
+    "%i %s 는 code 와 Retry-After 를 담은 ApiError 다",
+    async (status, code, headers, retryAfter) => {
+      respond(
+        status,
+        { code, message: "x", request_id: "r-1" },
+        headers as Record<string, string>,
+      );
+      expect(await failure(httpApi.confirm(submission))).toMatchObject({
+        status,
+        code,
+        retryAfter,
+      });
+    },
+  );
+
+  test("연결 실패는 status 0 이다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("down")));
+    expect(await failure(httpApi.confirm(submission))).toMatchObject({
+      status: 0,
+      code: "network",
     });
   });
 });
@@ -223,5 +318,76 @@ describe("explain", () => {
 
     respond(500, { code: "internal", message: "x", request_id: "r-1" });
     expect((await failure(httpApi.explain(body))).status).toBe(500);
+  });
+});
+
+describe("최초 검색의 409", () => {
+  const body = (code: string) => ({
+    code,
+    message: "충돌",
+    request_id: "r-409",
+  });
+
+  test("turn_in_progress 는 Retry-After 를 담고, 헤더가 없으면 고정 2초를 쓴다", async () => {
+    respond(409, body("turn_in_progress"), { "Retry-After": "3" });
+    expect(await failure(httpApi.search("q", undefined, "k-1"))).toMatchObject({
+      status: 409,
+      code: "turn_in_progress",
+      retryAfter: 3,
+    });
+
+    respond(409, body("turn_in_progress"));
+    expect((await failure(httpApi.search("q"))).retryAfter).toBe(2);
+  });
+
+  test.each(["session_conflict", "turn_indeterminate"])(
+    "%s 는 재전송 대기 없이 409 로 돌려준다",
+    async (code) => {
+      respond(409, body(code));
+      expect(await failure(httpApi.search("q"))).toMatchObject({
+        status: 409,
+        code,
+        retryAfter: null,
+      });
+    },
+  );
+
+  test("스트림을 열기 전 409 는 JSON 검색으로 새지 않고 그대로 던진다", async () => {
+    const fetchMock = respond(409, body("turn_in_progress"), {
+      "Retry-After": "2",
+    });
+    const stream = httpApi.searchStream("q", undefined, "k-1");
+    const events = stream[Symbol.asyncIterator]();
+    await expect(events.next()).rejects.toMatchObject({
+      status: 409,
+      code: "turn_in_progress",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("확인 제출의 5xx 본문", () => {
+  const submission = {
+    idempotencyKey: "k-1",
+    sessionId: "s-1",
+    secret: "secret-value-000000",
+    version: 1,
+    action: "answer_text" as const,
+    answer: "답",
+  };
+
+  test("계약을 지킨 outcome=error 본문은 오류 결과로 돌려준다", async () => {
+    respond(500, errorOutcome);
+    const result = await httpApi.confirm(submission);
+    expect(result).toMatchObject({ outcome: "error" });
+  });
+
+  test("504 와 계약 밖 5xx 본문은 오류로 던져 처리 결과 불명이 되게 한다", async () => {
+    // 504 는 본문이 유효한 오류 결과여도 불명으로 둔다.
+    respond(504, errorOutcome);
+    expect((await failure(httpApi.confirm(submission))).status).toBe(504);
+
+    respond(500, { detail: "boom" });
+    expect((await failure(httpApi.confirm(submission))).status).toBe(500);
   });
 });

@@ -3,7 +3,7 @@
 // 이 파일만 node에서 돈다. 여기서 보려는 것은 DOM이 아니라 HTTP다.
 import { beforeAll, describe, expect, test } from "vitest";
 import { httpApi } from "./api";
-import { ApiError } from "./types";
+import { ApiError, type SearchResponse } from "./types";
 
 /*
  * 실제 mafest-api를 상대로 도는 유일한 테스트(테스트 3층 중 세 번째).
@@ -65,7 +65,7 @@ describe.skipIf(!live)("실제 mafest-api 계약", () => {
     );
     expect(meta.examples.length).toBeLessThanOrEqual(6);
     for (const example of meta.examples) {
-      const result = await httpApi.search(example.question);
+      const result = (await httpApi.search(example.question)) as SearchResponse;
       expect
         .soft(result.outcome, `${example.id} ${example.question}`)
         .toBe(example.expected_outcome);
@@ -87,7 +87,7 @@ describe.skipIf(!live)("실제 mafest-api 계약", () => {
     // 개수 같은 집계 답은 answered여도 results가 []다(39 §2-12). 행이 있는 첫 예시를 쓴다.
     let found: { domain: string; productId: string } | null = null;
     for (const example of answeredExamples) {
-      const result = await httpApi.search(example.question);
+      const result = (await httpApi.search(example.question)) as SearchResponse;
       expect(result.outcome, `${example.id} ${example.question}`).toBe(
         "answered",
       );

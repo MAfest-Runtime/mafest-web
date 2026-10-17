@@ -17,12 +17,14 @@ import {
   streamEventsFor,
   unavailable,
 } from "./fixtures";
+import { createMockConfirmSessions } from "./mockConfirm";
 import {
   ApiError,
   StreamCutError,
   StreamUnavailableError,
   type SearchApi,
   type SearchResponse,
+  type SearchResult,
   type StreamEvent,
 } from "./types";
 import { validateStreamEvent } from "./validate";
@@ -111,13 +113,27 @@ const EVENT_DELAY_MS: Record<string, number> = {
 export function createMockApi(delayScale = 1): SearchApi {
   /** 질문별로 "첫 요청만 끊김"을 한 번 보냈는지. */
   const cutOnce = new Set<string>();
+  const confirmSessions = createMockConfirmSessions();
 
   async function* stream(
     question: string,
     signal?: AbortSignal,
+    runKey?: string,
   ): AsyncGenerator<StreamEvent, void, undefined> {
     await failBeforeOpen(question, delayScale, signal);
     if (/스트림 불가/.test(question)) throw new StreamUnavailableError();
+    // 기준 확인이 필요한 질문은 start 뒤 confirmation_required 로 done 없이 정상 종료한다.
+    const confirmation = confirmSessions.confirmationFor(question, runKey);
+    if (confirmation) {
+      await wait(EVENT_DELAY_MS.interpretation * delayScale, signal);
+      yield validateStreamEvent("start", {
+        request_id: "mock-confirm-start",
+        question,
+      });
+      await wait(EVENT_DELAY_MS.results * delayScale, signal);
+      yield validateStreamEvent("confirmation_required", confirmation);
+      return;
+    }
     const events = /전체 시한/.test(question)
       ? STREAM_FIXTURES.requestTimeout.map((item) =>
           item.event === "start"
@@ -154,15 +170,26 @@ export function createMockApi(delayScale = 1): SearchApi {
   }
 
   return {
-    searchStream: (question, signal) => stream(question, signal),
+    searchStream: (question, signal, runKey) =>
+      stream(question, signal, runKey),
 
-    async search(question, signal) {
+    async search(question, signal, runKey): Promise<SearchResult> {
       await failBeforeOpen(question, delayScale, signal);
+      const confirmation = confirmSessions.confirmationFor(question, runKey);
+      if (confirmation) {
+        await wait(250 * delayScale, signal);
+        return { kind: "confirmation_required", confirmation };
+      }
       const fixture = pick(question);
       // 생성 경로는 수 초, 게이트 경로는 짧다. 실제 체감과 비슷하게 둔다.
       const generated = fixture.answer.generated_by === "llm";
       await wait((generated ? 1600 : 250) * delayScale, signal);
       return structuredClone({ ...fixture, question });
+    },
+
+    async confirm(request, signal) {
+      await wait(400 * delayScale, signal);
+      return confirmSessions.confirm(request);
     },
 
     async getProduct(domain, productId, signal) {

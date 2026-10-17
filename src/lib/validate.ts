@@ -1,4 +1,6 @@
 import {
+  CONFIRM_ACTIONS,
+  CONFIRM_ANSWER_MAX,
   CLARIFY_KINDS,
   COLUMN_KINDS,
   CONDITION_OPS,
@@ -21,11 +23,14 @@ import {
   CONCEPT_TOPICS_MAX,
   STREAM_EVENT_NAMES,
   SUGGESTIONS_MAX,
+  type ConfirmationRequired,
+  type ConfirmationRequiredResponse,
   type ErrorBody,
   type ExplainResponse,
   type Meta,
   type ProductDetail,
   type SearchResponse,
+  type SearchResult,
   type StreamEvent,
 } from "./types";
 
@@ -561,6 +566,101 @@ export function validateExplainResponse(input: unknown): ExplainResponse {
   return e as unknown as ExplainResponse;
 }
 
+/** yaml SessionToken. 세션 id·secret 은 추측할 수 없는 값이며 헤더에 안전한 문자만 쓴다. */
+const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9._~-]{16,256}$/;
+const ISO_DATETIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/** yaml ConfirmationRequired 의 문구·목록 상한. */
+const CONFIRM_TEXT_MAX = 300;
+const CONFIRM_CONDITIONS_MAX = 10;
+const CONFIRM_VERSION_MAX = 1_000_000;
+
+function sessionToken(v: unknown, path: string): string {
+  const value = str(v, path);
+  if (!SESSION_TOKEN_PATTERN.test(value)) throw new ContractError(path);
+  return value;
+}
+
+/**
+ * 기준 확인 대기 본문(yaml ConfirmationRequired)을 검사한다. JSON 응답의 `confirmation`과 SSE
+ * `confirmation_required` 이벤트 data 가 이 검사를 함께 쓴다. 모르는 키·빠진 키·허용하지 않은 동작(예: 기본 기준으로
+ * 계속)은 거절하고 입력을 고치지 않는다.
+ */
+export function validateConfirmationRequired(
+  input: unknown,
+  path = "confirmation",
+): ConfirmationRequired {
+  const c = record(input, path, [
+    "original_question",
+    "understood_conditions",
+    "pending_criterion",
+    "prompt",
+    "actions",
+    "answer_max_length",
+    "session",
+  ]);
+  str(c.original_question, `${path}.original_question`, 1, CONFIRM_TEXT_MAX);
+  arr(
+    c.understood_conditions,
+    `${path}.understood_conditions`,
+    CONFIRM_CONDITIONS_MAX,
+  ).forEach((item, i) =>
+    str(item, `${path}.understood_conditions[${i}]`, 1, CONFIRM_TEXT_MAX),
+  );
+  const criterion = record(c.pending_criterion, `${path}.pending_criterion`, [
+    "id",
+    "label",
+  ]);
+  str(criterion.id, `${path}.pending_criterion.id`, 1, CONFIRM_TEXT_MAX);
+  str(criterion.label, `${path}.pending_criterion.label`, 1, CONFIRM_TEXT_MAX);
+  str(c.prompt, `${path}.prompt`, 1, CONFIRM_TEXT_MAX);
+  const actions = arr(c.actions, `${path}.actions`, CONFIRM_ACTIONS.length);
+  if (actions.length === 0) throw new ContractError(`${path}.actions`);
+  actions.forEach((a, i) => oneOf(a, CONFIRM_ACTIONS, `${path}.actions[${i}]`));
+  int(c.answer_max_length, `${path}.answer_max_length`, 1, CONFIRM_ANSWER_MAX);
+  const session = record(c.session, `${path}.session`, [
+    "id",
+    "secret",
+    "version",
+    "expires_at",
+  ]);
+  sessionToken(session.id, `${path}.session.id`);
+  sessionToken(session.secret, `${path}.session.secret`);
+  int(session.version, `${path}.session.version`, 0, CONFIRM_VERSION_MAX);
+  const expiresAt = str(session.expires_at, `${path}.session.expires_at`);
+  if (!ISO_DATETIME.test(expiresAt) || Number.isNaN(Date.parse(expiresAt)))
+    throw new ContractError(`${path}.session.expires_at`);
+  return c as unknown as ConfirmationRequired;
+}
+
+/**
+ * `/v1/search` JSON 200 본문을 검사한다. `kind` 가 있으면 확인 대기 응답(ConfirmationRequiredResponse),
+ * 없으면 기존 SearchResponse 로 본다. 두 형태를 섞어 통과시키지 않는다.
+ */
+export function validateSearchResult(input: unknown): SearchResult {
+  const isConfirm =
+    typeof input === "object" && input !== null && "kind" in input;
+  if (!isConfirm) return validateSearchResponse(input);
+  const r = record(input, "$", ["kind", "confirmation"]);
+  oneOf(r.kind, ["confirmation_required"], "kind");
+  validateConfirmationRequired(r.confirmation);
+  return r as unknown as ConfirmationRequiredResponse;
+}
+
+/**
+ * 확인 답변 제출 성공 본문을 검사한다. 일반 검색 응답이어야 하고, 질문이 원 질문 그대로여야 한다.
+ * 답변이 질문에 합쳐진 채 돌아오면 "원래 조건을 유지한 이어받기"가 아니기 때문이다.
+ */
+export function validateConfirmSubmitResponse(
+  input: unknown,
+  originalQuestion: string,
+): SearchResponse {
+  const response = validateSearchResponse(input);
+  if (response.question !== originalQuestion)
+    throw new ContractError("question");
+  return response;
+}
+
 /**
  * 앱 오류 본문(yaml ErrorBody). api.ts가 HTTP 실패 본문을 읽을 때 쓴다.
  * Traefik이 직접 만든 429 본문은 이 형식이 아니므로 여기서 실패하는 것이 정상이다.
@@ -634,6 +734,9 @@ export function validateStreamEvent(
       validateSearchResponse(d.response);
       break;
     }
+    case "confirmation_required":
+      validateConfirmationRequired(data, "confirmation_required");
+      break;
     case "error":
       validateErrorBody(data);
       break;
@@ -652,9 +755,17 @@ const STREAM_ORDER: Readonly<Record<string, number>> = {
   done: 6,
 };
 
+/** 스트림을 끝내는 이벤트. confirmation_required 는 done 없이 끝나는 정상 종료다(끊김이 아니다). */
+function isTerminalEvent(name: string): boolean {
+  return (
+    name === "done" || name === "error" || name === "confirmation_required"
+  );
+}
+
 /**
  * 끝난 스트림 전체를 검사한다. 각 이벤트 data 는 validateStreamEvent 로, 순서는 다음 규칙으로 본다.
- * - start 가 먼저 온다. done 또는 error 로 끝나고, 그 뒤에는 이벤트가 없다.
+ * - start 가 먼저 온다. done·error·confirmation_required 로 끝나고, 그 뒤에는 이벤트가 없다.
+ * - confirmation_required 는 start(또는 interpretation) 바로 뒤에서만 오며 results 이후에는 올 수 없다.
  * - error 는 어느 자리에서든 한 번 올 수 있고 스트림을 끝낸다.
  * - 나머지는 start → interpretation → results → answer_delta* → answer_done → suggestions → done 순서이며 건너뛰지 않는다.
  *   그래서 results 앞에 answer_delta 가 올 수 없다.
@@ -672,12 +783,18 @@ export function validateStream(
     const path = `stream[${i}]`;
     if (i > 0) {
       const last = checked[checked.length - 1];
-      if (last.event === "done" || last.event === "error")
-        throw new ContractError(path);
+      if (isTerminalEvent(last.event)) throw new ContractError(path);
     }
     const event = validateStreamEvent(item.event, item.data, mappings);
     if (i === 0 && event.event !== "start") throw new ContractError(path);
-    if (event.event !== "error") {
+    if (event.event === "confirmation_required") {
+      // 확인 대기는 start(또는 interpretation) 바로 뒤에서만 스트림을 끝낸다. results 이후에는 올 수 없다.
+      if (
+        position !== STREAM_ORDER.start &&
+        position !== STREAM_ORDER.interpretation
+      )
+        throw new ContractError(path);
+    } else if (event.event !== "error") {
       const order = STREAM_ORDER[event.event];
       const repeatsDelta = event.event === "answer_delta" && position === order;
       // 답 문장이 0개(템플릿 답·LLM 안 씀)면 results 다음에 바로 answer_done 이 온다.
@@ -696,7 +813,7 @@ export function validateStream(
     }
     checked.push(event);
   });
-  const end = checked[checked.length - 1].event;
-  if (end !== "done" && end !== "error") throw new ContractError("stream");
+  if (!isTerminalEvent(checked[checked.length - 1].event))
+    throw new ContractError("stream");
   return checked;
 }

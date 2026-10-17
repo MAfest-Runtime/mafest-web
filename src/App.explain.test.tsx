@@ -275,7 +275,9 @@ describe("concept requests across searches", () => {
       path: searchPath(answered.question),
     });
     expect(explain).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: /다시 시도/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /같은 요청으로 확인/ }),
+    );
     expect(await screen.findByRole("heading", { name: HEADING })).toBeVisible();
     expect(explain).toHaveBeenCalledTimes(1);
   });

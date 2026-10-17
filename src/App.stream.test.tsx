@@ -239,7 +239,7 @@ describe("stream outcomes on the default mock", () => {
   test("overall deadline: an error event after results shows the timeout screen", async () => {
     renderApp({ path: searchPath("전체 시한 초과 질문") });
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "시간이 초과됐습니다",
+      "처리 결과를 확인하지 못했습니다",
     );
   });
 
@@ -251,7 +251,7 @@ describe("stream outcomes on the default mock", () => {
       stream.push(new ApiError(500, "internal", null, "r-500"));
     });
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "서버 오류가 났습니다",
+      "처리 결과를 확인하지 못했습니다",
     );
   });
 });
@@ -309,7 +309,7 @@ describe("retry after a cut", () => {
       await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 5);
     });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "서버에 연결할 수 없습니다",
+      "처리 결과를 확인하지 못했습니다",
     );
     expect(searchStream).toHaveBeenCalledTimes(2);
   });
@@ -325,7 +325,9 @@ describe("retry after a cut", () => {
       await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 5);
     });
     expect(searchStream).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("alert")).toHaveTextContent("시간이 초과됐습니다");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "처리 결과를 확인하지 못했습니다",
+    );
   });
 });
 

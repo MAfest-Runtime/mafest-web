@@ -14,16 +14,18 @@ export const IS_MOCK = import.meta.env.VITE_API_MODE === "mock";
 function lazyMock(): SearchApi {
   const load = () => import("./mockApi").then((m) => m.mockApi);
   return {
-    search: (question, signal) =>
-      load().then((api) => api.search(question, signal)),
+    search: (question, signal, runKey) =>
+      load().then((api) => api.search(question, signal, runKey)),
+    confirm: (request, signal) =>
+      load().then((api) => api.confirm(request, signal)),
     getProduct: (domain, id, signal) =>
       load().then((api) => api.getProduct(domain, id, signal)),
     getMeta: (signal) => load().then((api) => api.getMeta(signal)),
     explain: (body, signal) => load().then((api) => api.explain(body, signal)),
-    searchStream: (question, signal) =>
+    searchStream: (question, signal, runKey) =>
       (async function* () {
         const api = await load();
-        yield* api.searchStream(question, signal);
+        yield* api.searchStream(question, signal, runKey);
       })(),
   };
 }
