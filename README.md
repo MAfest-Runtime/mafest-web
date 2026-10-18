@@ -47,7 +47,7 @@ VITE_API_MODE=mock npm run dev
 - 처리 중·처리 결과 불명·확정된 오류 결과·종료 상태별 화면과 다음 동작은 [docs/states.md](docs/states.md)에 모아 두었다. "같은 요청 확인"(같은 키)과 "새 검색"(새 키)을 혼동하지 않도록 거기서 구분한다.
 - 세션 secret과 답은 React 상태에만 있고 URL·콘솔·저장소에 남기지 않는다. 새로고침하면 확인은 처음부터 새로 시작한다.
 
-mock 모드(`VITE_API_MODE=mock`)에서는 "안전한 국내 ETF 5개 보여줘"를 검색하면 확인 화면이 뜬다(`src/lib/mockConfirm.ts`, 합성 값). 답변에 "전송실패"를 넣으면 첫 전송이 끊겨 "같은 요청 다시 보내기"를, "처리중"은 409 처리 중을, "충돌"·"만료"·"미지원"은 각각의 종료 안내를 볼 수 있다. 실서버·실DB·실LLM을 확인한 것이 아니다.
+mock 모드(`VITE_API_MODE=mock`)에서는 "안전한 국내 ETF 5개 보여줘"를 검색하면 확인 화면이 뜬다(`src/lib/mockConfirm.ts`, 합성 값). 답변에 "전송실패"를 넣으면 첫 전송이 끊겨 "같은 요청 다시 보내기"를, "처리중"은 409 처리 중을, "충돌"·"만료"·"미지원"은 각각의 종료 안내를 볼 수 있다. mock은 합성 값으로 화면만 보여 주며 서버·DB·모델을 부르지 않는다.
 
 mock 모드는 질문 낱말로 픽스처를 고른다(`src/lib/mockApi.ts`). 스트림도 같은 규칙으로 고른 응답을 이벤트로 나눠 시간차로 흘린다.
 
@@ -104,9 +104,9 @@ npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 �
 | 기준 확인 | `src/App.confirm.test.tsx`, `src/App.conflict.test.tsx`                           | 확인 대기·제출, 409 세 가지, 결과 불명과 확정된 오류 결과         |
 | 스트림    | `src/lib/stream.test.ts`, `src/App.stream*.test.tsx`, `src/specialChars.test.tsx` | SSE 파서, 스트림 호출·재시도·대체, 표시 순서, 취소, 특수문자      |
 | API 계약  | `src/lib/validate.test.ts`, `src/lib/api.test.ts`, `src/contract.test.ts`         | 픽스처가 계약을 지키는지, 요청 형태와 실패 처리                   |
-| 실제 HTTP | `src/lib/api.live.test.ts`                                                        | `MAFEST_LIVE_API=<주소>`일 때만. 예시 칩 6개의 기대 outcome(W6)   |
+| 실제 HTTP | `src/lib/api.live.test.ts`                                                        | `MAFEST_LIVE_API=<주소>`일 때만. 예시 칩 6개의 기대 outcome       |
 
-화면 시험의 공용 준비 코드는 `src/test/renderApp.tsx`에 있다. 시험은 전부 합성 mock이며 실서버·실브라우저 확인이 아니다.
+화면 시험의 공용 준비 코드는 `src/test/renderApp.tsx`에 있다. 실제 HTTP 시험을 뺀 나머지 시험은 합성 API를 쓴다.
 
 ## API 계약
 
@@ -114,7 +114,7 @@ npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 �
 - 기준 확인(1.5.0) 제안 배경: [contract/proposals/confirm-multiturn.md](contract/proposals/confirm-multiturn.md).
 - 웹 쪽 구현: `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사). 응답이 계약과 다르면 성공처럼 그리지 않고 "응답 형식 오류"로 보인다.
 - `src/contract.test.ts`가 합성 픽스처 전부를 yaml 스키마로 검사한다. yaml을 고치면 types·validate·픽스처를 함께 고친다.
-- mafest(P7)는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 `src/contract.test.ts`의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
+- mafest는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 `src/contract.test.ts`의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
 
 ## 배포
 
@@ -125,9 +125,7 @@ npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 �
 
 ## 알려진 제한
 
-- 기준 확인·409 처리는 합성 mock으로만 확인했다. 실서버·실DB·실LLM·실제 브라우저(IME 포함)에서 확인한 것이 아니다.
-- 서버가 같은 `Idempotency-Key`의 응답을 재생해 주는지는 웹에서 보장하지 못한다.
+- 최초 검색은 SSE(`POST /v1/search/stream`)가 기본이고, 스트림을 열기 전에 쓸 수 없다고 판명되면 JSON(`POST /v1/search`)으로 한 번 대신한다. 확인 답변 제출은 JSON이다. 화면이 답 문장을 덧붙이는 것은 서버가 보낸 이벤트 순서를 그대로 그리는 것이며, 모델 내부 생성이 실제로 스트리밍된다는 뜻은 아니다.
+- 같은 키 재전송은 새 해석이 아니다. 서버가 같은 `Idempotency-Key`의 응답을 재생해 주는지는 웹에서 보장하지 못한다.
 - 오류 결과(`outcome: "error"`)를 받아도 서버 쪽 저장 성공은 보장되지 않는다.
-- `App.explain` 시험에서 과거에 일시 실패가 보고된 적이 있고, 원인은 확인되지 않았다(재현하지 못함). 해결된 것으로 보지 않는다.
-- W6: P7(공개 API) 뒤 실 API 연결, `api.live.test.ts`로 예시 칩 6개 실측.
-- 단계 스트리밍(SSE)은 v1.1 선택 항목이다.
+- 세션 secret과 확인 답은 React 상태에만 있어서 새로고침하면 확인은 처음부터 다시 시작한다.
