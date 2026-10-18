@@ -22,6 +22,7 @@
 - 스트림이 `done`·`error` 없이 끊기면 1초 뒤 새 요청으로 **한 번만** 다시 받는다. 그동안 답 문장 영역은 비워 잘린 답과 새 답이 섞이지 않게 하고(표는 그대로), 두 번째도 끊기면 연결 실패 화면을 낸다. `error` 이벤트와 계약 위반은 다시 요청하지 않는다. 새 질문이나 페이지 이탈은 진행 중인 스트림과 대기 중인 재시도를 취소한다.
 - ping을 포함해 새 바이트가 30초 동안 없으면 연결이 끊긴 것으로 보고 같은 1회 재시도 규칙을 적용한다. `done`·`error`를 받으면 서버가 연결을 닫을 때까지 기다리지 않고 본문 reader를 즉시 취소한다.
 - 상태는 URL에만 있다. 새로고침·뒤로가기·링크 공유가 그대로 된다.
+- 요청 상태(처리 중·결과 불명·오류 결과·종료)별 동작은 [docs/states.md](docs/states.md)를 본다.
 - outcome 9종(`answered` `caveat` `no_result` `not_collected` `unread` `unavailable` `ambiguous` `refused` `error`)과 HTTP 429(Retry-After 카운트다운)·504·5xx·연결 실패를 각각 다른 화면으로 그린다. `generated_by=fallback`이면 전용 배너·생성 방식 배지·처리 기록은 표시하지 않고 답변·표·기준일·데이터 고지는 유지한다. API의 생성 방식과 진단 기록은 바꾸지 않으며 AI 생성 성공으로 표시하지 않는다.
 - 숫자는 오른쪽 정렬·고정폭. 수익률은 색 없이 부호로만.
 - 기준일은 상품군마다 다르다. 같으면 하나로, 다르면 상품군별로 나열한다.
@@ -40,13 +41,10 @@ VITE_API_MODE=mock npm run dev
 
 ### 기준 확인(멀티턴)
 
-서버가 최초 검색(`POST /v1/search/stream` 또는 `POST /v1/search`)에서 기준 확인이 필요하다고 판단하면 상품 조회·요약 없이 `ConfirmationRequired`를 돌려준다(공개 계약 1.5.0). 별도 "확인 시작" 요청은 없고, 이 응답이 곧 확인 대기라서 같은 질문이 두 번 해석되지 않는다.
+서버가 최초 검색(`POST /v1/search/stream` 또는 `POST /v1/search`)에서 기준 확인이 필요하다고 판단하면 상품 조회·요약 없이 `ConfirmationRequired`를 돌려준다(공개 계약 1.5.0). 별도 "확인 시작" 요청은 없고 이 응답이 곧 확인 대기다. 답은 `POST /v1/search/confirm`으로만 보내며 원 질문에 붙여 새로 검색하지 않는다.
 
-- SSE는 `start → (interpretation) → confirmation_required`로 `done` 없이 정상 종료한다. 끊김이 아니므로 자동 재시도를 하지 않고, 결과·답변이 없는 이 상태를 검색 성공으로 그리지 않는다. JSON 검색은 `{kind: "confirmation_required", confirmation}`을 준다.
-- 최초 검색 실행마다 `Idempotency-Key`를 만든다. 같은 실행의 스트림 재시도·JSON 대체는 같은 키를 쓰고, 새 질문·"처음부터 다시 확인"은 새 키다. 서버가 같은 키의 해석·확인 응답을 재생해 주기 전에는 서버에서 새 LLM 경로를 켜면 안 된다(웹은 재생을 보장하지 못한다).
-- 답은 `POST /v1/search/confirm`(`Idempotency-Key`, `X-Session-Secret`, 본문 `session_id`·`version`·`action`·`answer`)으로만 보낸다. 원 질문에 답을 붙여 새로 검색하지 않는다. 한 번의 제출이 하나의 키이고, 전송 결과를 모르면 사용자가 누를 때만 **처음 요청 그대로** 다시 보낸다.
-- 409는 code로 가른다(최초 검색과 확인 제출 모두). `turn_in_progress`는 "기존 요청을 처리하고 있습니다" 안내이고, HTTP는 `Retry-After`, 이미 열린 SSE의 error 이벤트는 헤더가 없어 고정 2초 동안 재전송 버튼을 잠근 뒤 **사용자가 누를 때만** 같은 요청(같은 키·같은 본문)을 다시 보낸다. `session_conflict`·`turn_indeterminate`는 영구 종료라 재전송 버튼 없이 새 검색(새 키)만 연다. 410 `session_expired`·501 `confirm_unsupported`도 종료 안내다. 모르는 오류 code를 처리 중으로 추측하지 않는다.
-- 처리 결과를 알 수 없는 실패(연결 오류·504·일반 5xx·계약 밖 본문)는 최초 검색과 확인 제출 모두 "처리 결과를 확인하지 못했습니다"와 "같은 요청으로 확인" 버튼(같은 키·같은 본문, 자동 재전송 없음, 성공 보장 없음)이다. 계약 검증을 통과한 `outcome: "error"` 응답만 확정된 오류 결과로 보고 "새 검색으로 시작"(새 키)만 연다. 500이라는 숫자나 문구로 확정 실패를 추측하지 않으며, 오류 결과를 받아도 서버의 DB 저장 성공은 보장하지 않는다.
+- 최초 검색 실행마다 `Idempotency-Key`를 만든다. 같은 실행의 스트림 재시도·JSON 대체는 같은 키를 쓰고, 새 질문·"처음부터 다시 확인"은 새 키다. 서버가 같은 키의 응답을 재생해 주기 전에는 서버에서 새 LLM 경로를 켜면 안 된다(웹은 재생을 보장하지 못한다).
+- 처리 중·처리 결과 불명·확정된 오류 결과·종료 상태별 화면과 다음 동작은 [docs/states.md](docs/states.md)에 모아 두었다. "같은 요청 확인"(같은 키)과 "새 검색"(새 키)을 혼동하지 않도록 거기서 구분한다.
 - 세션 secret과 답은 React 상태에만 있고 URL·콘솔·저장소에 남기지 않는다. 새로고침하면 확인은 처음부터 새로 시작한다.
 
 mock 모드(`VITE_API_MODE=mock`)에서는 "안전한 국내 ETF 5개 보여줘"를 검색하면 확인 화면이 뜬다(`src/lib/mockConfirm.ts`, 합성 값). 답변에 "전송실패"를 넣으면 첫 전송이 끊겨 "같은 요청 다시 보내기"를, "처리중"은 409 처리 중을, "충돌"·"만료"·"미지원"은 각각의 종료 안내를 볼 수 있다. 실서버·실DB·실LLM을 확인한 것이 아니다.
@@ -98,18 +96,22 @@ npm run test:scripts   # 이미지 금지 경로 검사의 회귀 테스트
 npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 검사
 ```
 
-테스트 3층:
+시험 층:
 
-| 층        | 파일                                                                              | 보는 것                                                         |
-| --------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| 화면      | `src/App.test.tsx`                                                                | 합성 API로 화면 로직(outcome 9종, 상세, 429, URL)               |
-| 스트림    | `src/lib/stream.test.ts`, `src/App.stream*.test.tsx`, `src/specialChars.test.tsx` | SSE 파서, 스트림 호출·재시도·대체, 표시 순서, 취소, 특수문자    |
-| API 계약  | `src/lib/validate.test.ts`, `src/lib/api.test.ts`                                 | 픽스처가 계약을 지키는지, 요청 형태와 실패 처리                 |
-| 실제 HTTP | `src/lib/api.live.test.ts`                                                        | `MAFEST_LIVE_API=<주소>`일 때만. 예시 칩 6개의 기대 outcome(W6) |
+| 층        | 파일                                                                              | 보는 것                                                           |
+| --------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 화면      | `src/App.test.tsx`, `src/App.explain.test.tsx`                                    | 합성 API로 화면 로직(outcome 9종, 상세, 429, URL), 개념 설명 카드 |
+| 기준 확인 | `src/App.confirm.test.tsx`, `src/App.conflict.test.tsx`                           | 확인 대기·제출, 409 세 가지, 결과 불명과 확정된 오류 결과         |
+| 스트림    | `src/lib/stream.test.ts`, `src/App.stream*.test.tsx`, `src/specialChars.test.tsx` | SSE 파서, 스트림 호출·재시도·대체, 표시 순서, 취소, 특수문자      |
+| API 계약  | `src/lib/validate.test.ts`, `src/lib/api.test.ts`, `src/contract.test.ts`         | 픽스처가 계약을 지키는지, 요청 형태와 실패 처리                   |
+| 실제 HTTP | `src/lib/api.live.test.ts`                                                        | `MAFEST_LIVE_API=<주소>`일 때만. 예시 칩 6개의 기대 outcome(W6)   |
+
+화면 시험의 공용 준비 코드는 `src/test/renderApp.tsx`에 있다. 시험은 전부 합성 mock이며 실서버·실브라우저 확인이 아니다.
 
 ## API 계약
 
 - 기계 정본: `contract/public-api-v1.openapi.yaml`(OpenAPI 3.1). 값 채우는 규칙은 작업 공간 `docs/repos/mafest/plans/39_공개API_명세.md`.
+- 기준 확인(1.5.0) 제안 배경: [contract/proposals/confirm-multiturn.md](contract/proposals/confirm-multiturn.md).
 - 웹 쪽 구현: `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사). 응답이 계약과 다르면 성공처럼 그리지 않고 "응답 형식 오류"로 보인다.
 - `src/contract.test.ts`가 합성 픽스처 전부를 yaml 스키마로 검사한다. yaml을 고치면 types·validate·픽스처를 함께 고친다.
 - mafest(P7)는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 `src/contract.test.ts`의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
@@ -121,7 +123,11 @@ npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 �
 - 앱 라우트(`/search`, `/about`, `/products/<d>/<id>`)만 index.html로 되돌린다. 라우트를 추가하면 `nginx/default.conf`와 `scripts/verify-container.sh`를 함께 고친다.
 - 사이트 이름에 특정 금융회사 이름·로고·색을 쓰지 않는다. 문구는 `src/lib/site.ts` 한곳에 있다.
 
-## 남은 일
+## 알려진 제한
 
+- 기준 확인·409 처리는 합성 mock으로만 확인했다. 실서버·실DB·실LLM·실제 브라우저(IME 포함)에서 확인한 것이 아니다.
+- 서버가 같은 `Idempotency-Key`의 응답을 재생해 주는지는 웹에서 보장하지 못한다.
+- 오류 결과(`outcome: "error"`)를 받아도 서버 쪽 저장 성공은 보장되지 않는다.
+- `App.explain` 시험에서 과거에 일시 실패가 보고된 적이 있고, 원인은 확인되지 않았다(재현하지 못함). 해결된 것으로 보지 않는다.
 - W6: P7(공개 API) 뒤 실 API 연결, `api.live.test.ts`로 예시 칩 6개 실측.
 - 단계 스트리밍(SSE)은 v1.1 선택 항목이다.
