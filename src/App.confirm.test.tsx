@@ -10,7 +10,12 @@ import {
   type StreamEvent,
 } from "./lib/types";
 import { useConfirmSubmit } from "./lib/useConfirmSubmit";
-import { renderApp, searchPath, testApi } from "./test/renderApp";
+import {
+  renderApp,
+  searchPath,
+  submitConfirmAnswer,
+  testApi,
+} from "./test/renderApp";
 import { answered } from "./lib/fixtures";
 
 /*
@@ -39,14 +44,6 @@ function setup(
   };
   const rendered = renderApp({ api, strict, path: searchPath(QUESTION) });
   return { ...rendered, api };
-}
-
-async function answerWith(
-  user: ReturnType<typeof setup>["user"],
-  text: string,
-) {
-  await user.type(await screen.findByLabelText("답변 입력"), text);
-  await user.click(screen.getByRole("button", { name: "답변 보내기" }));
 }
 
 /** confirm 호출의 첫 인자(요청)를 모은다. */
@@ -116,7 +113,7 @@ describe("확인 대기 진입", () => {
     const { user, api } = setup({
       confirm: vi.fn().mockRejectedValue(new ApiError(410, "session_expired")),
     });
-    await answerWith(user, "답");
+    await submitConfirmAnswer(user, "답");
     await screen.findByText("확인 시간이 지났습니다");
     const firstKey = vi.mocked(api.searchStream).mock.calls[0][2];
 
@@ -132,7 +129,7 @@ describe("확인 대기 진입", () => {
 describe("답변 제출", () => {
   test("답을 한 번 제출하고, 이어받은 결과에 요약·후속 질문·개념 설명이 같은 실행으로 붙는다", async () => {
     const { user, api } = setup();
-    await answerWith(user, "변동성이 낮은 것");
+    await submitConfirmAnswer(user, "변동성이 낮은 것");
 
     expect(
       await screen.findByRole(RESUMED, { name: RESUMED_NAME }),
@@ -211,7 +208,7 @@ describe("답변 제출", () => {
         question: `${QUESTION} 낮은 변동성`,
       }),
     });
-    await answerWith(user, "낮은 변동성");
+    await submitConfirmAnswer(user, "낮은 변동성");
     expect(await screen.findByText("답변을 처리하지 못했습니다")).toBeVisible();
     expect(screen.queryByRole(RESUMED, { name: RESUMED_NAME })).toBeNull();
     expect(screen.queryByRole("button", { name: /다시 보내기/ })).toBeNull();
@@ -221,7 +218,7 @@ describe("답변 제출", () => {
 describe("제출 실패", () => {
   test("전송 불명은 처음 요청을 같은 키·같은 본문으로만 다시 보내고, 답을 바꿀 수 없다", async () => {
     const { user, api } = setup();
-    await answerWith(user, "전송실패");
+    await submitConfirmAnswer(user, "전송실패");
 
     expect(await screen.findByText(/확인하지 못했습니다/)).toBeVisible();
     expect(requestsOf(api)).toHaveLength(1);
@@ -238,30 +235,6 @@ describe("제출 실패", () => {
     const [first, second] = requestsOf(api);
     expect(requestsOf(api)).toHaveLength(2);
     expect(second).toEqual(first);
-  });
-
-  test("409 turn_in_progress 는 충돌과 달리 처리 중 안내와 수동 동일 키 재전송만 연다", async () => {
-    const confirm = vi.fn();
-    const { user } = setup((base) => {
-      confirm
-        .mockRejectedValueOnce(new ApiError(409, "turn_in_progress", 0))
-        .mockImplementation((request) => base.confirm(request));
-      return { confirm };
-    });
-    await answerWith(user, "답");
-
-    expect(
-      await screen.findByText(/기존 요청을 처리하고 있습니다/),
-    ).toBeVisible();
-    // 자동으로 다시 보내지 않는다.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(confirm).toHaveBeenCalledTimes(1);
-
-    await user.click(
-      screen.getByRole("button", { name: "같은 요청으로 확인" }),
-    );
-    await screen.findByRole(RESUMED, { name: RESUMED_NAME });
-    expect(confirm.mock.calls[1][0]).toEqual(confirm.mock.calls[0][0]);
   });
 
   test.each([
@@ -283,7 +256,7 @@ describe("제출 실패", () => {
       const { user, api } = setup({
         confirm: vi.fn().mockRejectedValue(error),
       });
-      await answerWith(user, "답");
+      await submitConfirmAnswer(user, "답");
       expect(await screen.findByText(title)).toBeVisible();
       expect(screen.queryByRole("button", { name: /다시 보내기/ })).toBeNull();
       expect(api.confirm).toHaveBeenCalledTimes(1);
@@ -293,18 +266,6 @@ describe("제출 실패", () => {
         ).toBeNull();
     },
   );
-
-  test("일반 5xx 는 처리 여부 불명으로 두고 자동 새 키 재전송을 하지 않는다", async () => {
-    const { user, api } = setup({
-      confirm: vi.fn().mockRejectedValue(new ApiError(503, "unavailable")),
-    });
-    await answerWith(user, "답");
-    expect(
-      await screen.findByRole("button", { name: "같은 요청으로 확인" }),
-    ).toBeVisible();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(api.confirm).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("실행 전환과 잠금", () => {
@@ -342,7 +303,7 @@ describe("실행 전환과 잠금", () => {
           }),
       ),
     }));
-    await answerWith(user, "답");
+    await submitConfirmAnswer(user, "답");
     const box = await screen.findByRole("textbox", { name: "질문" });
     await user.clear(box);
     await user.type(box, "순자산 큰 국내 ETF 5개{Enter}");
@@ -403,7 +364,7 @@ describe("비밀 값 보관", () => {
     );
     try {
       const { user, api } = setup({}, true);
-      await answerWith(user, "비밀답변");
+      await submitConfirmAnswer(user, "비밀답변");
       await screen.findByRole(RESUMED, { name: RESUMED_NAME });
 
       expect(api.confirm).toHaveBeenCalledTimes(1);

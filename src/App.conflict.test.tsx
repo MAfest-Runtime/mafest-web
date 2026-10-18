@@ -2,7 +2,12 @@ import { act, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { answered, errorOutcome } from "./lib/fixtures";
 import { ApiError, type SearchApi } from "./lib/types";
-import { renderApp, searchPath, testApi } from "./test/renderApp";
+import {
+  renderApp,
+  searchPath,
+  submitConfirmAnswer,
+  testApi,
+} from "./test/renderApp";
 
 /*
  * 최초 검색과 확인 제출의 409 세 가지(turn_in_progress / session_conflict / turn_indeterminate).
@@ -152,14 +157,6 @@ describe("최초 검색의 409", () => {
 describe("확인 답변 제출의 409", () => {
   const CONFIRM_QUESTION = "안전한 국내 ETF 5개 보여줘";
 
-  async function submitAnswer(
-    user: ReturnType<typeof renderApp>["user"],
-    text: string,
-  ) {
-    await user.type(await screen.findByLabelText("답변 입력"), text);
-    await user.click(screen.getByRole("button", { name: "답변 보내기" }));
-  }
-
   test("turn_indeterminate: 입력창과 같은 요청 재전송이 사라지고 새 검색만 남는다", async () => {
     const base = testApi();
     const confirm = vi
@@ -170,7 +167,7 @@ describe("확인 답변 제출의 409", () => {
       path: searchPath(CONFIRM_QUESTION),
     });
 
-    await submitAnswer(user, "하락장에서 덜 빠지는 것");
+    await submitConfirmAnswer(user, "하락장에서 덜 빠지는 것");
     expect(
       await screen.findByText("이 요청은 더 이어갈 수 없습니다"),
     ).toBeVisible();
@@ -194,7 +191,7 @@ describe("확인 답변 제출의 409", () => {
       path: searchPath(CONFIRM_QUESTION),
     });
 
-    await submitAnswer(user, "하락장에서 덜 빠지는 것");
+    await submitConfirmAnswer(user, "하락장에서 덜 빠지는 것");
     await screen.findByText(/기존 요청을 처리하고 있습니다/);
     const button = screen.getByRole("button", RESEND);
     expect(button).toBeDisabled();
@@ -263,11 +260,6 @@ describe("처리 결과 불명과 확정된 오류 결과", () => {
   describe("확인 제출", () => {
     const CONFIRM_QUESTION = "안전한 국내 ETF 5개 보여줘";
 
-    async function submitAnswer(user: ReturnType<typeof renderApp>["user"]) {
-      await user.type(await screen.findByLabelText("답변 입력"), "낮은 변동성");
-      await user.click(screen.getByRole("button", { name: "답변 보내기" }));
-    }
-
     test("유효한 오류 결과는 오류 화면이고 같은 요청 재전송이 없다", async () => {
       const base = testApi();
       const confirm = vi
@@ -277,7 +269,7 @@ describe("처리 결과 불명과 확정된 오류 결과", () => {
         api: { ...base, confirm },
         path: searchPath(CONFIRM_QUESTION),
       });
-      await submitAnswer(user);
+      await submitConfirmAnswer(user, "낮은 변동성");
 
       expect(
         await screen.findByText(/요청 처리 중 오류가 발생했습니다/),
@@ -289,6 +281,7 @@ describe("처리 결과 불명과 확정된 오류 결과", () => {
 
     test.each([
       ["일반 500", new ApiError(500, "internal", null, "r-500")],
+      ["일반 503", new ApiError(503, "unavailable")],
       ["504", new ApiError(504, "timeout", null, "r-504")],
     ])(
       "%s 는 불명으로 두고, 자동 재전송 없이 누르면 같은 요청을 보낸다",
@@ -305,7 +298,7 @@ describe("처리 결과 불명과 확정된 오류 결과", () => {
           api: { ...base, confirm },
           path: searchPath(CONFIRM_QUESTION),
         });
-        await submitAnswer(user);
+        await submitConfirmAnswer(user, "낮은 변동성");
 
         await screen.findByText(/처리 결과를 확인하지 못했습니다/);
         await advance(5000);
