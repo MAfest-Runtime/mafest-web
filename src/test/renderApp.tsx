@@ -70,6 +70,15 @@ export function renderApp({
   return { user, api, unmount };
 }
 
+/** 확인 화면의 답변 입력창에 text를 쓰고 "답변 보내기"를 한 번 누른다. */
+export async function submitConfirmAnswer(
+  user: ReturnType<typeof renderApp>["user"],
+  text: string,
+) {
+  await user.type(await screen.findByLabelText("답변 입력"), text);
+  await user.click(screen.getByRole("button", { name: "답변 보내기" }));
+}
+
 export function currentLocation(): string {
   return decodeURIComponent(screen.getByTestId("location").textContent ?? "");
 }
