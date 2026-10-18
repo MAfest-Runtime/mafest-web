@@ -2,7 +2,7 @@
  * 공개 API 계약. 정본은 `contract/public-api-v1.openapi.yaml`, 값 채우는 규칙은
  * 작업 공간 `docs/repos/mafest/plans/39_공개API_명세.md`다.
  *
- * yaml이 바뀌면 이 파일, validate.ts, 픽스처를 함께 고친다. contract.test.ts가 픽스처를
+ * yaml이 바뀌면 이 파일, validate.ts, 픽스처를 함께 고친다. persona-ops-lab의 계약 시험이 픽스처를
  * yaml로, 같은 깨진 응답을 yaml과 validate.ts 둘 다로 검사하므로 어긋나면 실패한다.
  *
  * 도메인 키는 Evidence 계약 키다. 라우터 내부 이름(etf_kr 등)은 API에 나오지 않는다.

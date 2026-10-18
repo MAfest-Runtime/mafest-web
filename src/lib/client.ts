@@ -7,7 +7,7 @@ import type { SearchApi } from "./types";
  *
  * `import.meta.env.VITE_API_MODE`는 빌드 때 문자열로 바뀐다. 운영 이미지는
  * VITE_API_MODE=real로 빌드하므로 아래 비교가 false로 접히고, mock 모듈과 합성
- * 픽스처가 번들에서 빠진다(container:verify가 번들에 "SAMPLE"이 없는지 검사한다).
+ * 픽스처가 번들에서 빠진다(persona-ops-lab의 컨테이너 검증이 번들에 "SAMPLE"이 없는지 검사한다).
  */
 export const IS_MOCK = import.meta.env.VITE_API_MODE === "mock";
 

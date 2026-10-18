@@ -80,7 +80,7 @@ mock 모드는 질문 낱말로 픽스처를 고른다(`src/lib/mockApi.ts`). �
 VITE_API_MODE=real VITE_LOCAL_API_TARGET=http://127.0.0.1:18080 npm run dev
 ```
 
-실제 API 오류를 mock 응답으로 바꾸지 않는다. 운영 번들(`VITE_API_MODE=real`)에는 mock 모듈과 픽스처가 들어가지 않는다(`src/lib/client.ts`, `container:verify`가 검사).
+실제 API 오류를 mock 응답으로 바꾸지 않는다. 운영 번들(`VITE_API_MODE=real`)에는 mock 모듈과 픽스처가 들어가지 않는다(`src/lib/client.ts`, persona-ops-lab의 컨테이너 검증이 검사).
 
 ## 검증
 
@@ -88,37 +88,24 @@ VITE_API_MODE=real VITE_LOCAL_API_TARGET=http://127.0.0.1:18080 npm run dev
 npm run lint
 npm run format:check
 npm run typecheck
-npm test               # 화면·계약·api 테스트. 실연동은 [미실행]으로 표시된다
 npm run build
-npm run test:scripts   # 이미지 금지 경로 검사의 회귀 테스트
-npm run container:verify   # Docker 필요. linux/amd64 이미지를 빌드해 검사
 ```
 
-시험 층:
-
-| 층        | 파일                                                                              | 보는 것                                                           |
-| --------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 화면      | `src/App.test.tsx`, `src/App.explain.test.tsx`                                    | 합성 API로 화면 로직(outcome 9종, 상세, 429, URL), 개념 설명 카드 |
-| 기준 확인 | `src/App.confirm.test.tsx`, `src/App.conflict.test.tsx`                           | 확인 대기·제출, 409 세 가지, 결과 불명과 확정된 오류 결과         |
-| 스트림    | `src/lib/stream.test.ts`, `src/App.stream*.test.tsx`, `src/specialChars.test.tsx` | SSE 파서, 스트림 호출·재시도·대체, 표시 순서, 취소, 특수문자      |
-| API 계약  | `src/lib/validate.test.ts`, `src/lib/api.test.ts`, `src/contract.test.ts`         | 픽스처가 계약을 지키는지, 요청 형태와 실패 처리                   |
-| 실제 HTTP | `src/lib/api.live.test.ts`                                                        | `MAFEST_LIVE_API=<주소>`일 때만. 예시 칩 6개의 기대 outcome       |
-
-화면 시험의 공용 준비 코드는 `src/test/renderApp.tsx`에 있다. 실제 HTTP 시험을 뺀 나머지 시험은 합성 API를 쓴다.
+시험과 이미지 검증은 persona-ops-lab의 `repos/mafest-web/`에서 실행한다.
 
 ## API 계약
 
 - 기계 정본: `contract/public-api-v1.openapi.yaml`(OpenAPI 3.1). 값 채우는 규칙은 작업 공간 `docs/repos/mafest/plans/39_공개API_명세.md`.
 - 기준 확인(1.5.0) 제안 배경: [contract/proposals/confirm-multiturn.md](contract/proposals/confirm-multiturn.md).
 - 웹 쪽 구현: `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사). 응답이 계약과 다르면 성공처럼 그리지 않고 "응답 형식 오류"로 보인다.
-- `src/contract.test.ts`가 합성 픽스처 전부를 yaml 스키마로 검사한다. yaml을 고치면 types·validate·픽스처를 함께 고친다.
-- mafest는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 `src/contract.test.ts`의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
+- yaml을 고치면 types·validate·픽스처를 함께 고친다. 픽스처 전부를 yaml 스키마로 검사하는 계약 시험은 persona-ops-lab에 있다.
+- mafest는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 persona-ops-lab 계약 시험의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
 
 ## 배포
 
 - 이미지: 비루트 nginx(8080), read-only rootfs + `/tmp` tmpfs, `/healthz`(no-store).
 - `/v1`은 이 컨테이너가 아니라 Traefik이 `mafest-api`로 보낸다(같은 origin, CORS 없음). 여기서는 404.
-- 앱 라우트(`/search`, `/about`, `/products/<d>/<id>`)만 index.html로 되돌린다. 라우트를 추가하면 `nginx/default.conf`와 `scripts/verify-container.sh`를 함께 고친다.
+- 앱 라우트(`/search`, `/about`, `/products/<d>/<id>`)만 index.html로 되돌린다. 라우트를 추가하면 `nginx/default.conf`와 persona-ops-lab의 `repos/mafest-web/tools/verify-container.sh`를 함께 고친다.
 - 사이트 이름에 특정 금융회사 이름·로고·색을 쓰지 않는다. 문구는 `src/lib/site.ts` 한곳에 있다.
 
 ## 알려진 제한
