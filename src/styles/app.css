@@ -1137,9 +1137,13 @@ button:disabled:hover {
 
 /* 확정 전 구간: 번호·채움 없이 점선 밑줄만 둔다 */
 .qmark--draft {
+  padding: 1px 3px 0;
+  border-bottom: 2px dashed var(--accent);
+  border-radius: 3px 3px 0 0;
+  background: var(--accent-soft);
   box-shadow: none;
-  border-bottom: 2px dotted var(--accent);
-  border-radius: 0;
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 .interp--draft .chips {

@@ -1779,6 +1779,17 @@ function draftEvents(response: SearchResponse): StreamFixtureEvent[] {
     spans.push({ text: m.text, start, end });
     if (spans.length >= DRAFT_SPANS_MAX) break;
   }
+  // mock 은 입력한 질문을 그대로 쓰므로 픽스처 mapping 의 text 가 질문에 없을 수 있다. 그러면 구간이 하나도 안 남아
+  // 개발 서버에서 강조를 볼 수 없으므로, 질문의 낱말(공백 기준, 2글자 이상) 앞쪽 3개를 근거 구간으로 대신 쓴다.
+  if (spans.length === 0) {
+    let cursor = 0;
+    for (const word of response.question.split(/(\s+)/)) {
+      const length = Array.from(word).length;
+      if (word.trim() !== "" && length >= 2 && spans.length < 3)
+        spans.push({ text: word, start: cursor, end: cursor + length });
+      cursor += length;
+    }
+  }
   const domains = response.interpretation.domains.map((d) => d.domain);
   const snapshots: StreamInterpretationDraft[] = [
     { domains, spans: [] },
