@@ -1,20 +1,10 @@
 import { useCountdown } from "../lib/useCountdown";
-import { useEffect, useState } from "react";
+import { useElapsed } from "../lib/useElapsed";
 import { IN_PROGRESS_RETRY_SECONDS, type ApiError } from "../lib/types";
 import { Icon } from "./Icon";
 
-/** 경과 초를 1초마다 다시 그린다. */
-function useElapsed(startedAt: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  return Math.max(0, Math.floor((now - startedAt) / 1000));
-}
-
 /**
- * 검색 중. 게이트 경로는 수십 ms, 생성 경로는 3~6초라 경과 초를 보여 기다릴 근거를 준다.
+ * 검색 중. 해석 미리보기(draft)가 없을 때의 기본 안내다. 경과 초를 보여 기다릴 근거를 준다.
  */
 export function SearchLoading({
   startedAt,
@@ -36,7 +26,7 @@ export function SearchLoading({
             ? "연결이 끊겨 다시 시도하고 있습니다."
             : elapsed < 2
               ? "질문을 해석하고 조회하고 있습니다."
-              : "답변 문장을 만들고 있습니다. 보통 3~6초 걸립니다."}
+              : "답변 문장을 만들고 있습니다."}
         </p>
       </div>
       <div className="skeleton" aria-hidden="true">

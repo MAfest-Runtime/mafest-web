@@ -16,7 +16,8 @@
 | `/about`                 | 동작 방식, 데이터 범위, 한계, 기록 정책, 비공식 고지                    |
 
 - 결과 화면은 ① 질문 해석(질문 표현에 번호 밑줄 → "표현 → 대상·조건·정렬·개수 → 사전 일치·패턴·규칙·기본값" 목록, 해석 결과 문장, 상품군 상태) ② 어떻게 답했나(해석→조회→판정→생성→검증 5단계, 판정 설명, 단계별 시간 막대, 접힌 세부 기록) ③ 답변·표 순서다. 답변 속 인용 상품명·숫자는 표의 그 행·칸과 이어진다. 좁은 화면은 ①을 늘 보이고 ②·③을 [결과 | 처리 과정]으로 전환한다. 규칙은 `src/lib/explain.ts` 한곳에 있다.
-- 검색은 `POST /v1/search/stream`(SSE)이 기본이고, 화면은 도착 순서대로 바뀐다: 해석 카드 → 결과 표·그래프 → 답변 문장이 하나씩 덧붙음(`aria-live="polite"`) → 최종 답으로 덮음 → 후속 질문 칩 → `done`의 완성 응답으로 화면 전체 확정(답변↔표 인용 연결 포함). 이벤트는 도착하는 대로 기존 `validateStreamEvent`·`validateStream`으로 검사하고, 계약과 어긋난 것은 그리지 않고 "응답 형식 오류" 화면으로 간다. 구현은 `src/lib/api.ts`(호출·검사), `src/lib/sse.ts`(SSE 파서), `src/lib/searchStream.ts`(재시도·대체 경로), `src/lib/useSearchRun.ts`(화면 상태), `src/lib/useConfirmSubmit.ts`(확인 답변 제출 상태).
+- 검색은 `POST /v1/search/stream`(SSE)이 기본이고, 화면은 도착 순서대로 바뀐다: (서버가 보내면) 해석 미리보기 → 해석 카드 → 결과 표·그래프 → 답변 문장이 하나씩 덧붙음(`aria-live="polite"`) → 최종 답으로 덮음 → 후속 질문 칩 → `done`의 완성 응답으로 화면 전체 확정(답변↔표 인용 연결 포함). 이벤트는 도착하는 대로 기존 `validateStreamEvent`·`validateStream`으로 검사하고, 계약과 어긋난 것은 그리지 않고 "응답 형식 오류" 화면으로 간다. 구현은 `src/lib/api.ts`(호출·검사), `src/lib/sse.ts`(SSE 파서), `src/lib/searchStream.ts`(재시도·대체 경로), `src/lib/useSearchRun.ts`(화면 상태), `src/lib/useConfirmSubmit.ts`(확인 답변 제출 상태).
+- 해석 미리보기(1.6.0 `interpretation_draft`): 서버가 켜 둔 경우에만 `start` 다음·최종 `interpretation` 앞에 온다. 상품군 칩과 질문에서 근거로 집은 구간을 점선 밑줄로 먼저 보여 주며, 확정 전 값이라 올 때마다 앞의 것을 통째로 바꾸고 최종 해석이 오면 해석 카드로 대체한다. 확인 대기·오류·재시도 때는 보이지 않는다. 이 이벤트가 없어도 화면은 이전과 같게 동작한다(기본 로딩 표시).
 - 스트림을 열기 전에 쓸 수 없다고 판명되면(응답이 `text/event-stream`이 아님, 열기 전 연결 실패, 404·5xx) `POST /v1/search`로 한 번 대신한다. 422·429·504는 대신하지 않고 기존 오류 화면 규칙을 따른다.
 - 답 요약은 최대 600자·5문장이다(`answer.text`). 표 아래 "알아두면 좋은 개념"은 최종 응답(`done`) 뒤에 `POST /v1/explain`을 검색 실행당 **한 번만** 불러 그린다(`src/lib/useConcepts.ts`, `src/components/ConceptCards.tsx`). 자세히 보기는 응답에 든 상세 설명을 펼칠 뿐 요청을 보내지 않고, 실패하거나 주제가 없으면 아무것도 그리지 않으며 검색을 다시 실행하지 않는다. 후속 질문 칩(검색 실행용)과 섞이지 않는다.
 - 스트림이 `done`·`error` 없이 끊기면 1초 뒤 새 요청으로 **한 번만** 다시 받는다. 그동안 답 문장 영역은 비워 잘린 답과 새 답이 섞이지 않게 하고(표는 그대로), 두 번째도 끊기면 연결 실패 화면을 낸다. `error` 이벤트와 계약 위반은 다시 요청하지 않는다. 새 질문이나 페이지 이탈은 진행 중인 스트림과 대기 중인 재시도를 취소한다.
@@ -73,6 +74,7 @@ mock 모드는 질문 낱말로 픽스처를 고른다(`src/lib/mockApi.ts`). �
 | 끊김             | 첫 요청만 문장 하나 뒤 끊김 → 1초 뒤 재시도 → 정상            |
 | 계속 끊김        | 매번 끊김 → 재시도도 끊겨 연결 실패 화면                      |
 | 스트림 불가      | 스트림을 쓸 수 없어 `POST /v1/search`로 대신함                |
+| 미리보기 없음    | 해석 미리보기(`interpretation_draft`) 없이 보냄               |
 
 실제 API를 붙일 때는 로컬 API 주소를 준다(브라우저에는 전송되지 않는다).
 
@@ -99,7 +101,7 @@ npm run build
 - 기준 확인(1.5.0) 제안 배경: [contract/proposals/confirm-multiturn.md](contract/proposals/confirm-multiturn.md).
 - 웹 쪽 구현: `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사). 응답이 계약과 다르면 성공처럼 그리지 않고 "응답 형식 오류"로 보인다.
 - yaml을 고치면 types·validate·픽스처를 함께 고친다. 픽스처 전부를 yaml 스키마로 검사하는 계약 시험은 persona-ops-lab에 있다.
-- mafest는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 persona-ops-lab 계약 시험의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
+- mafest는 이 yaml을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 이 파일과 **바이트 단위로 같아야** 하고 persona-ops-lab 계약 시험의 `CONTRACT_SHA256`과 같은 값을 고정한다(1.6.0: 스트림 이벤트 `interpretation_draft`; 1.5.0: 기준 확인 `ConfirmationRequired`·`POST /v1/search/confirm`·`Idempotency-Key`; 1.4.0: 600자 상한, `POST /v1/explain`).
 
 ## 배포
 

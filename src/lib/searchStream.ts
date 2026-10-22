@@ -11,6 +11,7 @@ import {
   type SearchResponse,
   type SearchResult,
   type StreamEvent,
+  type StreamInterpretationDraft,
   type StreamResults,
 } from "./types";
 
@@ -20,10 +21,14 @@ export const RETRY_DELAY_MS = 1000;
 /**
  * 스트림이 지금까지 그려 둔 것. 이벤트가 오는 대로 채워지고, `done`이 오면 완성 응답이 이것을 덮는다.
  * 재시도 중에는 잘린 답을 비우고(sentences·answer·suggestions) 표와 해석은 그대로 둔다 — 데이터가 고정이라
- * 다시 받아도 같고, 비웠다 채우면 화면이 깜빡이기 때문이다.
+ * 다시 받아도 같고, 비웠다 채우면 화면이 깜빡이기 때문이다. 해석 미리보기(draft)는 확정 전 값이라 재시도 때 비운다.
  */
 export interface StreamView {
   requestId: string | null;
+  /** start 이벤트의 정리된 질문. draft 구간 위치(코드 포인트)는 이 문자열 기준이다. */
+  question: string | null;
+  /** 최종 해석 전의 미리보기(가장 최근 스냅샷). 없거나 최종 해석이 오면 null. */
+  draft: StreamInterpretationDraft | null;
   interpretation: Interpretation | null;
   results: StreamResults | null;
   /** 지금까지 덧붙은 답 문장(answer_delta). */
@@ -36,12 +41,15 @@ export interface StreamView {
 }
 
 /**
- * 스트리밍 중 화면이 어디까지 왔는가. results: 해석만 있고 표는 아직. answer: 표가 있고 답 문장을 받는 중.
+ * 스트리밍 중 화면이 어디까지 왔는가. interpreting: 최종 해석 전(미리보기만 있을 수 있다).
+ * results: 해석만 있고 표는 아직. answer: 표가 있고 답 문장을 받는 중.
  * 최종 답(answer_done)이 오면 더는 스트리밍 단계가 아니다(undefined).
+ * 표를 그리는 OutcomeView 는 최종 해석이 온 뒤에만 만들어지므로 interpreting 은 받지 않는다.
  */
-export type StreamPhase = "results" | "answer";
+export type StreamPhase = "interpreting" | "results" | "answer";
 
 export function streamPhase(view: StreamView): StreamPhase | undefined {
+  if (view.interpretation === null) return "interpreting";
   if (view.results === null) return "results";
   return view.answer === null ? "answer" : undefined;
 }
@@ -49,6 +57,8 @@ export function streamPhase(view: StreamView): StreamPhase | undefined {
 export function emptyView(): StreamView {
   return {
     requestId: null,
+    question: null,
+    draft: null,
     interpretation: null,
     results: null,
     sentences: [],
@@ -62,17 +72,26 @@ export function emptyView(): StreamView {
 export function applyEvent(view: StreamView, event: StreamEvent): StreamView {
   switch (event.event) {
     case "start":
-      // 새 스트림이 열리면 앞 시도의 답을 비운다(잘린 답과 새 답이 섞이지 않게).
+      // 새 스트림이 열리면 앞 시도의 답과 미리보기를 비운다(잘린 것과 새 것이 섞이지 않게).
       return {
         ...view,
         requestId: event.data.request_id,
+        question: event.data.question,
+        draft: null,
         sentences: [],
         answer: null,
         suggestions: null,
         retrying: false,
       };
+    case "interpretation_draft":
+      // 누적 스냅샷이므로 앞의 것을 통째로 바꾼다(합치지 않는다).
+      return { ...view, draft: event.data };
     case "interpretation":
-      return { ...view, interpretation: event.data.interpretation };
+      return {
+        ...view,
+        draft: null,
+        interpretation: event.data.interpretation,
+      };
     case "results":
       return { ...view, results: event.data };
     case "answer_delta":
@@ -218,6 +237,7 @@ export async function runSearchStream(
       if (attempt >= 1) throw new ApiError(0, "network");
       view = {
         ...view,
+        draft: null,
         sentences: [],
         answer: null,
         suggestions: null,

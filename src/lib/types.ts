@@ -636,6 +636,9 @@ export function isSearchUnknown(error: ApiError): boolean {
   return error.code === "network" || error.status >= 500;
 }
 
+/** interpretation_draft.spans 상한(yaml InterpretationDraftSpan 배열 maxItems). */
+export const DRAFT_SPANS_MAX = 12;
+
 /** 정리(공백·전각 반각화) 뒤 질문 길이 상한. 입력창도 이 길이까지 받는다. */
 export const QUESTION_MAX = 200;
 /** 정리하기 전 원래 질문 길이 상한(SearchRequest.question maxLength). */
@@ -646,13 +649,17 @@ export const ANSWER_TEXT_MAX = 600;
 export const SUGGESTIONS_MAX = 3;
 
 /**
- * `POST /v1/search/stream` 이벤트. 순서: start → interpretation → results → answer_delta(0개 이상)
- * → answer_done → suggestions → done. 실패하면 그 자리에서 error 한 번 보내고 닫는다.
+ * `POST /v1/search/stream` 이벤트. 순서: start → interpretation_draft(0개 이상) → interpretation → results →
+ * answer_delta(0개 이상) → answer_done → suggestions → done. 실패하면 그 자리에서 error 한 번 보내고 닫는다.
  * done 의 response 는 `/v1/search` 응답과 같은 스키마이고, 웹은 이것으로 화면을 최종 확정한다.
- * 기준 확인이 필요하면 start → (interpretation) → confirmation_required 로 done 없이 정상 종료한다.
+ * interpretation_draft 는 선택이다(서버 플래그가 꺼져 있으면 오지 않는다). start 다음·interpretation 앞에서만 오고,
+ * 올 때마다 앞의 것을 통째로 대체하는 확정 전 스냅샷이다.
+ * 기준 확인이 필요하면 start → interpretation_draft(0개 이상) → (interpretation) → confirmation_required 로
+ * done 없이 정상 종료한다.
  */
 export const STREAM_EVENT_NAMES = [
   "start",
+  "interpretation_draft",
   "interpretation",
   "results",
   "answer_delta",
@@ -667,6 +674,20 @@ export type StreamEventName = (typeof STREAM_EVENT_NAMES)[number];
 export interface StreamStart {
   request_id: string;
   question: string;
+}
+
+/** 질문에서 모델이 근거로 집은 구간. start·end 는 StreamStart.question 의 코드 포인트 위치이고 [start, end) 다. */
+export interface InterpretationDraftSpan {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** 해석 진행 미리보기(확정 전). 누적 스냅샷이라 올 때마다 앞의 것을 통째로 대체한다. */
+export interface StreamInterpretationDraft {
+  /** 모델이 낸 순서의 공개 도메인 키(중복 없음). */
+  domains: DomainKey[];
+  spans: InterpretationDraftSpan[];
 }
 
 /** 해석 직후. interpretation.graph 는 아직 빈 그래프다. */
@@ -702,6 +723,7 @@ export interface StreamDone {
 
 export type StreamEvent =
   | { event: "start"; data: StreamStart }
+  | { event: "interpretation_draft"; data: StreamInterpretationDraft }
   | { event: "interpretation"; data: StreamInterpretation }
   | { event: "results"; data: StreamResults }
   | { event: "answer_delta"; data: StreamAnswerDelta }
