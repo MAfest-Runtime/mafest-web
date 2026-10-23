@@ -1,6 +1,7 @@
 import { formatCount, isNumeric } from "./format";
 import { graphLayers } from "./graphLayout";
 import type {
+  DomainKey,
   EntityType,
   EvidenceStatus,
   GraphNode,
@@ -16,6 +17,16 @@ import type {
   SearchResponse,
   TraceStage,
 } from "./types";
+
+/** 공개 도메인 키의 화면 라벨. 해석 미리보기 칩과 mock 픽스처가 같은 이름을 쓴다. */
+export const DOMAIN_LABEL: Record<DomainKey, string> = {
+  bond: "채권",
+  kr_etf: "국내 ETF",
+  kr_etn: "국내 ETN",
+  xx_etf: "해외 ETF",
+  xx_etn: "해외 ETN",
+  fund: "공모펀드",
+};
 
 /**
  * "어떻게 답했나"를 그리기 위한 파생 값. 화면 컴포넌트가 응답을 직접 해석하지 않도록
@@ -364,6 +375,12 @@ function toUtf16(question: string, codePoint: number): number {
 }
 
 /**
+ * 질문 속 구간을 가리키는 값. 최종 해석의 mapping 과 해석 미리보기의 span 이 같은 모양으로 쓴다.
+ * start·end 는 코드 포인트 위치(없으면 null)이고, 맞지 않으면 text 를 질문에서 다시 찾는다.
+ */
+export type QuotedSpan = Pick<InterpretationMapping, "text" | "start" | "end">;
+
+/**
  * 질문을 해석 과정 표현 단위로 자른다. 각 조각은 그 표현을 해석한 mapping의 번호를 갖는다.
  *
  * 서버 위치가 질문 글자와 맞으면 그 위치를, 어긋나면(질문이 바뀌었거나 서버 계산 오류)
@@ -372,7 +389,7 @@ function toUtf16(question: string, codePoint: number): number {
  */
 export function questionSegments(
   question: string,
-  mappings: InterpretationMapping[],
+  mappings: ReadonlyArray<QuotedSpan>,
 ): QuestionSegment[] {
   const spans: Array<{ start: number; end: number; index: number }> = [];
   mappings.forEach((m, index) => {

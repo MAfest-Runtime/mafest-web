@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 금융상품 질의 검색 공개 API
-  version: 1.5.0
+  version: 1.6.0
   description: |
     mafest-web이 쓰는 공개 API(`/v1`). 사람이 읽는 설명은 mafest
     `docs/plans/39_공개API_명세.md`, 이 파일은 기계가 검사하는 정본이다.
@@ -23,6 +23,10 @@ info:
       `done` 없이 정상 종료). 사용자가 답을 보내면 `POST /v1/search/confirm`이 저장된 원 질문의 조건을 유지한 채
       `SearchResponse`를 준다. 최초 검색과 확인 제출은 `Idempotency-Key` 헤더로 실행·제출을 구분한다. 기존
       `outcome: ambiguous` + `clarify`(세션 없는 새 질문 고르기)의 의미는 바뀌지 않는다.
+    - [1.6.0] 스트림 이벤트 `interpretation_draft`(해석 진행 미리보기)가 추가됐다. 최종 해석 전에 도메인과 질문 속 근거
+      구간을 누적 스냅샷으로 먼저 보여 준다. 1.5.0 클라이언트는 이 이벤트를 모르므로 서버는 설정 플래그가 켜진
+      때만 보내고, 이 이벤트를 받는 클라이언트(웹)가 먼저 배포돼 있어야 한다. 이 이벤트가 없어도 스트림은 1.5.0과
+      같게 동작한다. 최종 해석·판정·결과는 바뀌지 않는다.
 servers:
   - url: /
 paths:
@@ -108,14 +112,19 @@ paths:
       operationId: searchStream
       summary: "[r9] /v1/search와 같은 처리를 SSE 이벤트로 나눠 보낸다"
       description: |
-        이벤트 순서: start → interpretation → results → answer_delta(0개 이상) → answer_done →
-        suggestions → done. 실패하면 그 자리에서 error 한 번 보내고 닫는다.
-        [1.5.0] 기준 확인이 필요하면 start → (interpretation) → confirmation_required 로 `done` 없이 정상 종료한다.
+        이벤트 순서: start → interpretation_draft(0개 이상) → interpretation → results → answer_delta(0개 이상) →
+        answer_done → suggestions → done. 실패하면 그 자리에서 error 한 번 보내고 닫는다.
+        [1.6.0] interpretation_draft 는 선택 사항이다. start 다음, interpretation 앞에서만 오고 interpretation 뒤에는
+        오지 않는다. 오는 만큼 앞의 것을 통째로 대체하는 누적 스냅샷이며 확정된 해석이 아니다.
+        플래그가 꺼져 있거나 같은 요청의 재생·해석 모델을 부르지 않는 경로에서는 0개다.
+        [1.5.0] 기준 확인이 필요하면 start → interpretation_draft(0개 이상) → (interpretation) → confirmation_required 로
+        `done` 없이 정상 종료한다.
         이때 results·answer_*·suggestions·done 은 오지 않고, 상품 조회·답변 생성·제안·설명도 하지 않는다.
         confirmation_required 의 data 는 ConfirmationRequired 본문 그대로다(JSON 응답의 `kind` 래퍼는 없다).
         확인 대기 종료는 연결 끊김이 아니므로 클라이언트는 자동으로 다시 요청하지 않는다.
         각 이벤트의 data는 JSON이며 스키마는 아래와 같다(event 이름 → 스키마).
-        start=StreamStart, interpretation=StreamInterpretation, results=StreamResults,
+        start=StreamStart, interpretation_draft=StreamInterpretationDraft,
+        interpretation=StreamInterpretation, results=StreamResults,
         answer_delta=StreamAnswerDelta, answer_done=StreamAnswerDone,
         suggestions=StreamSuggestions, done=StreamDone, confirmation_required=ConfirmationRequired,
         error=ErrorBody.
@@ -1222,6 +1231,34 @@ components:
       properties:
         request_id: { $ref: "#/components/schemas/RequestId" }
         question: { type: string }
+    StreamInterpretationDraft:
+      description: |
+        [1.6.0] 해석 진행 미리보기. 확정 전 값이라 틀릴 수 있고, 올 때마다 앞의 draft 를 통째로 대체한다(변화분이 아니다).
+        domains 는 모델이 낸 순서의 공개 도메인 키(중복 없음)이다. spans 는 질문에서 모델이 근거로 집은 구간이며
+        최대 12개, 같은 (start, end)는 한 번만 담는다. uncertainties·clarification 의 근거 구간은 담지 않는다.
+        위치는 InterpretationStep 과 같은 규칙이다: `start` 이벤트의 question 기준 코드 포인트 위치, `[start, end)`.
+        question[start:end] 가 text 와 항상 같아야 하며 맞지 않는 구간은 서버가 버린다.
+      type: object
+      required: [domains, spans]
+      additionalProperties: false
+      properties:
+        domains:
+          type: array
+          uniqueItems: true
+          maxItems: 6
+          items: { $ref: "#/components/schemas/DomainKey" }
+        spans:
+          type: array
+          maxItems: 12
+          items: { $ref: "#/components/schemas/InterpretationDraftSpan" }
+    InterpretationDraftSpan:
+      type: object
+      required: [text, start, end]
+      additionalProperties: false
+      properties:
+        text: { type: string, minLength: 1 }
+        start: { type: integer, minimum: 0 }
+        end: { type: integer, minimum: 1 }
     StreamInterpretation:
       description: 해석 직후. interpretation.graph는 아직 빈 그래프(nodes·edges 모두 []).
       type: object

@@ -44,6 +44,7 @@ import { validateStreamEvent } from "./validate";
  *   "계속 끊김"               → 문장 하나를 보낸 뒤 매번 연결이 끊김(재시도해도 끊김)
  *   "끊김"                    → 첫 요청만 문장 하나를 보낸 뒤 끊김, 재시도는 정상
  *   "스트림 불가"             → 스트림을 쓸 수 없어 일반 검색으로 대신함
+ *   "미리보기 없음"           → 해석 미리보기(interpretation_draft) 없이 보냄(서버 플래그가 꺼진 경우)
  */
 const RULES: Array<[RegExp, SearchResponse]> = [
   [/추천|오를|전망|사도 돼/, refused],
@@ -101,6 +102,7 @@ async function failBeforeOpen(
 
 /** 이벤트 앞에서 기다리는 시간(ms). 해석 → 표 → 문장 순서로 느껴지게 둔다. */
 const EVENT_DELAY_MS: Record<string, number> = {
+  interpretation_draft: 500,
   interpretation: 250,
   results: 350,
   answer_delta: 600,
@@ -108,6 +110,12 @@ const EVENT_DELAY_MS: Record<string, number> = {
   suggestions: 200,
   done: 50,
 };
+
+/**
+ * 해석 미리보기(draft)가 있을 때 마지막 draft 뒤에서 최종 해석까지 기다리는 시간(ms).
+ * 실서버는 해석 모델이 끝나고 판정을 거칠 때까지 수 초 걸리므로, 개발 서버에서 미리보기가 보이게 길게 둔다.
+ */
+const FINAL_INTERPRETATION_AFTER_DRAFT_MS = 1800;
 
 /** 테스트에서 지연을 0으로 둔다. */
 export function createMockApi(delayScale = 1): SearchApi {
@@ -140,13 +148,22 @@ export function createMockApi(delayScale = 1): SearchApi {
             ? { ...item, data: { ...(item.data as object), question } }
             : item,
         )
-      : streamEventsFor({ ...pick(question), question });
+      : streamEventsFor(
+          { ...pick(question), question },
+          !/미리보기 없음/.test(question),
+        );
     const alwaysCut = /계속 끊김/.test(question);
     const firstCut = /끊김/.test(question) && !cutOnce.has(question);
     let mappings: unknown = [];
     let deltas = 0;
+    let draftSeen = false;
     for (const item of structuredClone(events)) {
-      await wait((EVENT_DELAY_MS[item.event] ?? 0) * delayScale, signal);
+      draftSeen ||= item.event === "interpretation_draft";
+      const delayMs =
+        item.event === "interpretation" && draftSeen
+          ? FINAL_INTERPRETATION_AFTER_DRAFT_MS
+          : (EVENT_DELAY_MS[item.event] ?? 0);
+      await wait(delayMs * delayScale, signal);
       const event = validateStreamEvent(item.event, item.data, mappings);
       if (event.event === "interpretation")
         mappings = event.data.interpretation.mappings;

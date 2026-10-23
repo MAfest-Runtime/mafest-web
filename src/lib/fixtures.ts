@@ -11,15 +11,19 @@ import type {
   GraphNode,
   InterpretationMapping,
   InterpretedDomain,
+  InterpretationDraftSpan,
   Meta,
   ProductDetail,
   ResultGroup,
   ResultRow,
   SearchGraph,
   SearchResponse,
+  StreamInterpretationDraft,
   Trace,
   ValueSource,
 } from "./types";
+import { DRAFT_SPANS_MAX } from "./types";
+import { DOMAIN_LABEL } from "./explain";
 
 /**
  * mock 모드와 화면 테스트가 쓰는 픽스처.
@@ -30,15 +34,6 @@ import type {
  *
  * 질문 → 픽스처 연결은 mockApi.ts에 있다.
  */
-
-export const DOMAIN_LABEL: Record<DomainKey, string> = {
-  bond: "채권",
-  kr_etf: "국내 ETF",
-  kr_etn: "국내 ETN",
-  xx_etf: "해외 ETF",
-  xx_etn: "해외 ETN",
-  fund: "공모펀드",
-};
 
 const ETF_DATE = "2026-08-21";
 const BOND_DATE = "2026-08-14";
@@ -1751,13 +1746,80 @@ function uncitedGroups(groups: ResultGroup[]): ResultGroup[] {
   }));
 }
 
-/** start → interpretation → results 까지. 해석 때 graph 는 빈 그래프다. */
-function streamHead(response: SearchResponse): StreamFixtureEvent[] {
+/** 코드 포인트 [start, end) 구간을 잘라 낸다. 서버가 위치를 코드 포인트로 세므로 UTF-16 slice 를 쓰지 않는다. */
+function codePointSlice(text: string, start: number, end: number): string {
+  return Array.from(text).slice(start, end).join("");
+}
+
+/**
+ * 해석 미리보기 스냅샷(누적) 2~3개. 최종 해석의 상품군·mapping 에서 만든다: ① 상품군만 ② 첫 구간 ③ 모든 구간.
+ * 위치가 질문과 맞지 않는 mapping(mock 이 질문을 바꿔 넣은 경우)은 질문에서 text 를 다시 찾고, 못 찾으면 버린다.
+ * 같은 (start, end)는 한 번만 담고 최대 DRAFT_SPANS_MAX 개다. 미리보기로 보일 것이 없으면 빈 배열이다.
+ */
+function draftEvents(response: SearchResponse): StreamFixtureEvent[] {
+  const points = Array.from(response.question);
+  const spans: InterpretationDraftSpan[] = [];
+  const seen = new Set<string>();
+  for (const m of response.interpretation.mappings) {
+    if (m.text === null || m.text === "") continue;
+    let start = m.start;
+    let end = m.end;
+    if (
+      start === null ||
+      end === null ||
+      codePointSlice(response.question, start, end) !== m.text
+    ) {
+      const at = response.question.indexOf(m.text);
+      if (at < 0) continue;
+      start = Array.from(response.question.slice(0, at)).length;
+      end = start + Array.from(m.text).length;
+    }
+    if (end > points.length || seen.has(`${start}:${end}`)) continue;
+    seen.add(`${start}:${end}`);
+    spans.push({ text: m.text, start, end });
+    if (spans.length >= DRAFT_SPANS_MAX) break;
+  }
+  // mock 은 입력한 질문을 그대로 쓰므로 픽스처 mapping 의 text 가 질문에 없을 수 있다. 그러면 구간이 하나도 안 남아
+  // 개발 서버에서 강조를 볼 수 없으므로, 질문의 낱말(공백 기준, 2글자 이상) 앞쪽 3개를 근거 구간으로 대신 쓴다.
+  if (spans.length === 0) {
+    let cursor = 0;
+    for (const word of response.question.split(/(\s+)/)) {
+      const length = Array.from(word).length;
+      if (word.trim() !== "" && length >= 2 && spans.length < 3)
+        spans.push({ text: word, start: cursor, end: cursor + length });
+      cursor += length;
+    }
+  }
+  const domains = response.interpretation.domains.map((d) => d.domain);
+  const snapshots: StreamInterpretationDraft[] = [
+    { domains, spans: [] },
+    { domains, spans: spans.slice(0, 1) },
+    { domains, spans },
+  ];
+  // 앞 스냅샷과 같은 것, 아무 내용도 없는 것은 보내지 않는다(서버도 바뀐 때만 보낸다).
+  return snapshots
+    .filter(
+      (s, i) =>
+        (s.domains.length > 0 || s.spans.length > 0) &&
+        (i === 0 || s.spans.length !== snapshots[i - 1].spans.length),
+    )
+    .map((data) => ({ event: "interpretation_draft", data }));
+}
+
+/**
+ * start → (interpretation_draft…) → interpretation → results 까지. 해석 때 graph 는 빈 그래프다.
+ * `withDraft=false` 이면 draft 없이 1.5.0 과 같은 순서로 보낸다(서버 플래그가 꺼진 경우).
+ */
+function streamHead(
+  response: SearchResponse,
+  withDraft = true,
+): StreamFixtureEvent[] {
   return [
     {
       event: "start",
       data: { request_id: response.request_id, question: response.question },
     },
+    ...(withDraft ? draftEvents(response) : []),
     {
       event: "interpretation",
       data: {
@@ -1832,6 +1894,17 @@ export const STREAM_FIXTURES: Record<string, StreamFixtureEvent[]> = {
     { event: "suggestions", data: { suggestions: answered.suggestions } },
     { event: "done", data: { response: answered } },
   ],
+  // draft 가 없는 스트림(1.5.0 과 같은 순서). 서버 플래그가 꺼진 경우다.
+  answeredNoDraft: [
+    ...streamHead(answered, false),
+    ...ANSWER_SENTENCES.map((text, index) => ({
+      event: "answer_delta",
+      data: { index, text },
+    })),
+    { event: "answer_done", data: { answer: answered.answer } },
+    { event: "suggestions", data: { suggestions: answered.suggestions } },
+    { event: "done", data: { response: answered } },
+  ],
   // 생성 시한(20초) 초과: 문장 없이 fallback 답으로 끝낸다. 표는 그대로다.
   generationTimeout: [
     ...streamHead(fallback),
@@ -1841,7 +1914,7 @@ export const STREAM_FIXTURES: Record<string, StreamFixtureEvent[]> = {
   ],
   // 전체 시한(30초) 초과: 그 자리에서 error 한 번 보내고 닫는다.
   requestTimeout: [
-    ...streamHead(answered).slice(0, 3),
+    ...streamHead(answered),
     {
       event: "error",
       data: {
@@ -1860,13 +1933,14 @@ export const STREAM_FIXTURES: Record<string, StreamFixtureEvent[]> = {
  */
 export function streamEventsFor(
   response: SearchResponse,
+  withDraft = true,
 ): StreamFixtureEvent[] {
   const sentences =
     response.answer.generated_by === "llm"
       ? response.answer.text.split(/(?<=[.!?])\s+/).slice(0, 5)
       : [];
   return [
-    ...streamHead(response),
+    ...streamHead(response, withDraft),
     ...sentences.map((text, index) => ({
       event: "answer_delta",
       data: { index, text },

@@ -21,6 +21,7 @@ import {
   ANSWER_TEXT_MAX,
   CONCEPT_SOURCES_MAX,
   CONCEPT_TOPICS_MAX,
+  DRAFT_SPANS_MAX,
   STREAM_EVENT_NAMES,
   SUGGESTIONS_MAX,
   type ConfirmationRequired,
@@ -674,6 +675,49 @@ export function validateErrorBody(input: unknown): ErrorBody {
 }
 
 /**
+ * interpretation_draft 의 data(yaml StreamInterpretationDraft)를 검사한다. 키 누락·추가, 도메인 허용 목록·중복,
+ * span 의 정수 범위와 빈 text, spans 상한, 같은 (start, end) 중복을 거절한다.
+ * 질문과 위치가 맞는지(question[start:end] == text)는 질문을 아는 validateStream 이 본다.
+ */
+function validateInterpretationDraft(data: unknown): void {
+  const d = record(data, "interpretation_draft", ["domains", "spans"]);
+  const domains = arr(d.domains, "interpretation_draft.domains");
+  domains.forEach((key, i) =>
+    oneOf(key, DOMAIN_KEYS, `interpretation_draft.domains[${i}]`),
+  );
+  if (new Set(domains).size !== domains.length)
+    throw new ContractError("interpretation_draft.domains");
+  const spans = arr(d.spans, "interpretation_draft.spans", DRAFT_SPANS_MAX);
+  const seen = new Set<string>();
+  spans.forEach((item, i) => {
+    const p = `interpretation_draft.spans[${i}]`;
+    const span = record(item, p, ["text", "start", "end"]);
+    str(span.text, `${p}.text`, 1);
+    const start = int(span.start, `${p}.start`, 0, Number.MAX_SAFE_INTEGER);
+    const end = int(span.end, `${p}.end`, 1, Number.MAX_SAFE_INTEGER);
+    if (end <= start) throw new ContractError(`${p}.end`);
+    const key = `${start}:${end}`;
+    if (seen.has(key)) throw new ContractError(p);
+    seen.add(key);
+  });
+}
+
+/**
+ * 질문의 코드 포인트 [start, end) 구간이 text 와 같은지 본다. 위치는 서버가 코드 포인트로 세므로
+ * UTF-16 단위의 String.slice 를 쓰면 이모지 같은 보충 문자에서 어긋난다.
+ */
+function sliceMatches(
+  codePoints: readonly string[],
+  start: number,
+  end: number,
+  text: string,
+): boolean {
+  return (
+    end <= codePoints.length && codePoints.slice(start, end).join("") === text
+  );
+}
+
+/**
  * 스트림 이벤트 하나의 data 를 yaml 의 이벤트 스키마(StreamStart…StreamDone, error=ErrorBody)로 검사한다.
  * mappings 는 앞선 interpretation 이벤트의 해석 목록이다. results 의 graph 가 가리키는 mapping 번호를 이것으로 확인한다.
  */
@@ -690,6 +734,9 @@ export function validateStreamEvent(
       str(d.question, "start.question");
       break;
     }
+    case "interpretation_draft":
+      validateInterpretationDraft(data);
+      break;
     case "interpretation": {
       const d = record(data, "interpretation", ["interpretation"]);
       validateInterpretation(d.interpretation);
@@ -744,15 +791,16 @@ export function validateStreamEvent(
   return { event, data } as StreamEvent;
 }
 
-/** 스트림 이벤트 순서. 같은 단계는 answer_delta 만 여러 번 올 수 있다. */
+/** 스트림 이벤트 순서. 같은 단계는 interpretation_draft 와 answer_delta 만 여러 번 올 수 있다. */
 const STREAM_ORDER: Readonly<Record<string, number>> = {
   start: 0,
-  interpretation: 1,
-  results: 2,
-  answer_delta: 3,
-  answer_done: 4,
-  suggestions: 5,
-  done: 6,
+  interpretation_draft: 1,
+  interpretation: 2,
+  results: 3,
+  answer_delta: 4,
+  answer_done: 5,
+  suggestions: 6,
+  done: 7,
 };
 
 /** 스트림을 끝내는 이벤트. confirmation_required 는 done 없이 끝나는 정상 종료다(끊김이 아니다). */
@@ -765,10 +813,12 @@ function isTerminalEvent(name: string): boolean {
 /**
  * 끝난 스트림 전체를 검사한다. 각 이벤트 data 는 validateStreamEvent 로, 순서는 다음 규칙으로 본다.
  * - start 가 먼저 온다. done·error·confirmation_required 로 끝나고, 그 뒤에는 이벤트가 없다.
- * - confirmation_required 는 start(또는 interpretation) 바로 뒤에서만 오며 results 이후에는 올 수 없다.
+ * - interpretation_draft 는 선택이며 start 다음·interpretation 앞에서만 0회 이상 온다. interpretation 뒤에는 올 수 없다.
+ *   각 span 은 start 이벤트의 question 을 코드 포인트로 잘랐을 때 text 와 같아야 한다.
+ * - confirmation_required 는 start·interpretation_draft·interpretation 바로 뒤에서만 오며 results 이후에는 올 수 없다.
  * - error 는 어느 자리에서든 한 번 올 수 있고 스트림을 끝낸다.
- * - 나머지는 start → interpretation → results → answer_delta* → answer_done → suggestions → done 순서이며 건너뛰지 않는다.
- *   그래서 results 앞에 answer_delta 가 올 수 없다.
+ * - 나머지는 start → interpretation_draft* → interpretation → results → answer_delta* → answer_done → suggestions → done
+ *   순서이며 (draft 와 answer_delta 외에는) 건너뛰지 않는다. 그래서 results 앞에 answer_delta 가 올 수 없다.
  * - answer_delta.index 는 0 부터 하나씩 늘어난다.
  */
 export function validateStream(
@@ -777,6 +827,7 @@ export function validateStream(
   if (events.length === 0) throw new ContractError("stream");
   const checked: StreamEvent[] = [];
   let mappings: unknown = [];
+  let questionPoints: string[] = [];
   let position = -1;
   let nextDelta = 0;
   events.forEach((item, i) => {
@@ -791,18 +842,38 @@ export function validateStream(
       // 확인 대기는 start(또는 interpretation) 바로 뒤에서만 스트림을 끝낸다. results 이후에는 올 수 없다.
       if (
         position !== STREAM_ORDER.start &&
+        position !== STREAM_ORDER.interpretation_draft &&
         position !== STREAM_ORDER.interpretation
       )
         throw new ContractError(path);
     } else if (event.event !== "error") {
       const order = STREAM_ORDER[event.event];
+      // draft 는 선택이라 start 에서 곧바로 interpretation 으로 가도 되고, draft 끼리는 반복할 수 있다.
+      const repeatsDraft =
+        event.event === "interpretation_draft" && position === order;
+      const skipsDraft =
+        event.event === "interpretation" && position === STREAM_ORDER.start;
       const repeatsDelta = event.event === "answer_delta" && position === order;
       // 답 문장이 0개(템플릿 답·LLM 안 씀)면 results 다음에 바로 answer_done 이 온다.
       const skipsDeltas =
         event.event === "answer_done" && position === STREAM_ORDER.results;
-      if (!repeatsDelta && !skipsDeltas && order !== position + 1)
+      if (
+        !repeatsDraft &&
+        !skipsDraft &&
+        !repeatsDelta &&
+        !skipsDeltas &&
+        order !== position + 1
+      )
         throw new ContractError(path);
       position = order;
+    }
+    if (event.event === "start")
+      questionPoints = Array.from(event.data.question);
+    if (event.event === "interpretation_draft") {
+      event.data.spans.forEach((span, si) => {
+        if (!sliceMatches(questionPoints, span.start, span.end, span.text))
+          throw new ContractError(`${path}.spans[${si}]`);
+      });
     }
     if (event.event === "interpretation")
       mappings = event.data.interpretation.mappings;

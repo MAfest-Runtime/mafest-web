@@ -1,6 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router";
 import { ConfirmEnded, ConfirmView } from "../components/ConfirmView";
 import { InvestmentNotice } from "../components/Common";
+import { InterpretationDraft } from "../components/InterpretationDraft";
 import { useTitle } from "../lib/useTitle";
 import { OutcomeView } from "../components/OutcomeView";
 import { ProductDetailView } from "../components/ProductDetail";
@@ -95,12 +96,23 @@ export function SearchRoute({ api }: { api: SearchApi }) {
           {tooLong && (
             <RequestFailed error={new ApiError(422, "question_too_long")} />
           )}
-          {state.status === "streaming" && streaming === null && (
-            <SearchLoading
-              startedAt={state.startedAt}
-              retrying={state.view.retrying}
-            />
-          )}
+          {/* 최종 해석 전: 미리보기가 있으면 그것을, 없으면 기존 로딩을 같은 자리에 그린다. */}
+          {state.status === "streaming" &&
+            streaming === null &&
+            (state.view.draft !== null &&
+            state.view.question !== null &&
+            !state.view.retrying ? (
+              <InterpretationDraft
+                question={state.view.question}
+                draft={state.view.draft}
+                startedAt={state.startedAt}
+              />
+            ) : (
+              <SearchLoading
+                startedAt={state.startedAt}
+                retrying={state.view.retrying}
+              />
+            ))}
           {confirming !== null &&
             (gate.phase === "awaiting" ||
               gate.phase === "submitting" ||
