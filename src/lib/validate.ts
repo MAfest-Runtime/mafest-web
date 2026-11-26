@@ -1,3 +1,4 @@
+import validateAnswerStructure from "./generated/answer-validator.mjs";
 import {
   CONFIRM_ACTIONS,
   CONFIRM_ANSWER_MAX,
@@ -8,7 +9,6 @@ import {
   ERROR_CODES,
   EVIDENCE_STATUSES,
   ENTITY_TYPES,
-  GENERATED_BY,
   GRAPH_EDGE_KINDS,
   GRAPH_NODE_KINDS,
   GRAPH_STATES,
@@ -18,7 +18,6 @@ import {
   RELATION_TYPES,
   TRACE_STAGES,
   VALUE_SOURCES,
-  ANSWER_TEXT_MAX,
   CONCEPT_SOURCES_MAX,
   CONCEPT_TOPICS_MAX,
   DRAFT_SPANS_MAX,
@@ -180,15 +179,21 @@ function validateClarify(v: unknown, path: string): void {
 const TABLE_OUTCOMES: ReadonlySet<string> = new Set(["answered", "caveat"]);
 
 function validateAnswer(v: unknown): void {
-  const answer = record(v, "answer", ["text", "generated_by", "notices"]);
-  str(answer.text, "answer.text", 1, ANSWER_TEXT_MAX);
-  oneOf(answer.generated_by, GENERATED_BY, "answer.generated_by");
-  arr(answer.notices, "answer.notices").forEach((n, i) => {
-    const p = `answer.notices[${i}]`;
-    const notice = record(n, p, ["code", "text"]);
-    str(notice.code, `${p}.code`);
-    str(notice.text, `${p}.text`, 1);
-  });
+  if (validateAnswerStructure(v)) return;
+  const error = validateAnswerStructure.errors?.[0];
+  if (!error) throw new ContractError("answer");
+
+  // JSON Pointer를 기존 answer.notices[0].text 형식으로 옮겨 오류 위치만 남긴다.
+  let path = "answer";
+  for (const segment of error.instancePath.split("/").slice(1)) {
+    const key = segment.replaceAll("~1", "/").replaceAll("~0", "~");
+    path = /^\d+$/.test(key) ? `${path}[${key}]` : child(path, key);
+  }
+  if (error.keyword === "required")
+    path = child(path, error.params.missingProperty);
+  if (error.keyword === "additionalProperties")
+    path = child(path, error.params.additionalProperty);
+  throw new ContractError(path);
 }
 
 const GRAPH_ID = /^[A-Za-z0-9_-]{1,32}$/;

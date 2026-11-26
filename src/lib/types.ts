@@ -643,8 +643,6 @@ export const DRAFT_SPANS_MAX = 12;
 export const QUESTION_MAX = 200;
 /** 정리하기 전 원래 질문 길이 상한(SearchRequest.question maxLength). */
 export const QUESTION_RAW_MAX = 1000;
-/** answer.text 상한(최대 5문장·600자). */
-export const ANSWER_TEXT_MAX = 600;
 /** suggestions 상한. */
 export const SUGGESTIONS_MAX = 3;
 
