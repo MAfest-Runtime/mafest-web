@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import type { EndReason, RunState } from "../lib/useSearchRun";
+import { checkConfirmAnswer } from "../lib/validate";
 import { PendingRecovery, SentAnswer } from "./PendingRecovery";
 
 function RewriteButton({
@@ -38,15 +39,11 @@ function AnswerForm({
   const [draft, setDraft] = useState("");
   const answerId = useId();
   const countId = useId();
-  const trimmed = draft.trim();
-  // 서버와 같은 유니코드 코드 포인트 단위로 센다. 이모지도 글자 하나로 센다.
-  const length = [...trimmed].length;
-  const tooLong = length > maxLength;
-  const canSubmit = length > 0 && !tooLong;
+  const { answer, length, tooLong } = checkConfirmAnswer(draft, maxLength);
 
   function submitAnswer(event: FormEvent) {
     event.preventDefault();
-    if (canSubmit) onSubmit(trimmed);
+    if (answer !== null) onSubmit(answer);
   }
 
   return (
@@ -68,7 +65,7 @@ function AnswerForm({
             event.nativeEvent.isComposing || event.keyCode === 229;
           if (event.key === "Enter" && !event.shiftKey && !composing) {
             event.preventDefault();
-            if (!event.repeat && canSubmit) onSubmit(trimmed);
+            if (!event.repeat && answer !== null) onSubmit(answer);
           }
         }}
       />
@@ -79,7 +76,7 @@ function AnswerForm({
         {length} / {maxLength}자{tooLong && " · 줄여서 보내 주세요"}
       </p>
       <div className="search-actions">
-        <button type="submit" className="button" disabled={!canSubmit}>
+        <button type="submit" className="button" disabled={answer === null}>
           답변 보내기
         </button>
         <RewriteButton onRewrite={onRewrite} secondary />
@@ -178,13 +175,9 @@ export function ConfirmView({
           <p className="muted">보내는 중</p>
         </>
       )}
-      {(phase?.phase === "sendUnknown" || phase?.phase === "inProgress") && (
+      {phase?.phase === "pending" && (
         <PendingRecovery
-          state={
-            phase.phase === "inProgress"
-              ? { kind: "inProgress", retryAt: phase.retryAt }
-              : { kind: "unknown" }
-          }
+          state={phase.recovery}
           answer={phase.answer}
           focusFrom={promptRef}
           onResend={() => {

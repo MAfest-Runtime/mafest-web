@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { ConfirmView } from "../components/ConfirmView";
 import { InvestmentNotice } from "../components/Common";
@@ -30,6 +31,7 @@ import { useSearchRun, type RunState } from "../lib/useSearchRun";
 export function SearchRoute({ api }: { api: SearchApi }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const wide = useMediaQuery(WIDE_QUERY);
   const question = params.get("q")?.trim() || null;
   const selected = parseSelected(params.get("p"));
@@ -50,7 +52,11 @@ export function SearchRoute({ api }: { api: SearchApi }) {
   const shown = state.status === "done" ? state.data : streaming;
   const announcement = searchAnnouncement(state);
 
-  const submit = (next: string) => navigate(searchHref(next));
+  const submit = (next: string) => {
+    // URL의 질문이 같으면 훅의 URL 변경 효과가 실행되지 않으므로 직접 새 검색을 시작한다.
+    if (!tooLong && next === question) startNewSearch();
+    navigate(searchHref(next));
+  };
 
   const openProduct = (domain: string, productId: string) => {
     if (!wide || !question) {
@@ -69,7 +75,11 @@ export function SearchRoute({ api }: { api: SearchApi }) {
   return (
     <div className={`results ${showPanel ? "results--panel" : ""}`}>
       <div className="results__bar">
-        <SearchBox initial={question ?? ""} onSubmit={submit} />
+        <SearchBox
+          initial={question ?? ""}
+          inputRef={searchInputRef}
+          onSubmit={submit}
+        />
       </div>
 
       <div className="results__body">
@@ -121,7 +131,12 @@ export function SearchRoute({ api }: { api: SearchApi }) {
               <PendingRecovery
                 state={state.recovery}
                 requestId={state.error.requestId}
-                onResend={resend}
+                onResend={(event) => {
+                  // 재전송 중 버튼이 사라진다. 버튼에 있던 초점만 계속 보이는 검색창으로 옮긴다.
+                  if (event.currentTarget === document.activeElement)
+                    searchInputRef.current?.focus();
+                  resend();
+                }}
               />
             )}
           {state.status === "failed" && state.recovery.kind === "conflict" && (
@@ -188,6 +203,7 @@ function searchAnnouncement(state: RunState): string {
     }
     if (view.answer !== null)
       return "답변을 받았습니다. 검색을 마무리하고 있습니다.";
+    if (view.sentences.length > 0) return "답변 문장을 받고 있습니다.";
     if (view.results !== null)
       return "조회 결과를 받았습니다. 답변을 기다리고 있습니다.";
     if (view.interpretation !== null)
@@ -197,7 +213,9 @@ function searchAnnouncement(state: RunState): string {
   }
   if (
     (state.status === "failed" && state.recovery.kind === "inProgress") ||
-    (state.status === "confirm" && state.phase.phase === "inProgress")
+    (state.status === "confirm" &&
+      state.phase.phase === "pending" &&
+      state.phase.recovery.kind === "inProgress")
   ) {
     return `${IN_PROGRESS_TITLE}. 대기 시간이 지나면 같은 요청으로 확인할 수 있습니다.`;
   }

@@ -648,6 +648,14 @@ export function validateSearchResult(input: unknown): SearchResult {
   return r as unknown as ConfirmationRequiredResponse;
 }
 
+/** 공백을 정리하고 서버와 같은 유니코드 코드 포인트 단위로 센다. */
+export function checkConfirmAnswer(input: string, maxLength: number) {
+  const trimmed = input.trim();
+  const length = [...trimmed].length;
+  const tooLong = length > maxLength;
+  return { answer: length > 0 && !tooLong ? trimmed : null, length, tooLong };
+}
+
 /**
  * 확인 답변 제출 성공 본문을 검사한다. 일반 검색 응답이어야 하고, 질문이 원 질문 그대로여야 한다.
  * 답변이 질문에 합쳐진 채 돌아오면 "원래 조건을 유지한 이어받기"가 아니기 때문이다.

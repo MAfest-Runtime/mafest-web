@@ -11,18 +11,21 @@ import {
   type SearchApi,
   type SearchResponse,
 } from "./types";
-import { validateConfirmSubmitResponse } from "./validate";
+import { checkConfirmAnswer, validateConfirmSubmitResponse } from "./validate";
 
 export type ConfirmForm = Pick<
   ConfirmationRequired,
   "original_question" | "understood_conditions" | "prompt" | "answer_max_length"
 > & { canAnswer: boolean };
 
+export type PendingRequestRecovery =
+  | { kind: "inProgress"; retryAt: number }
+  | { kind: "unknown" };
+
 export type ConfirmPhase =
   | { phase: "awaiting" }
   | { phase: "submitting"; answer: string }
-  | { phase: "sendUnknown"; answer: string }
-  | { phase: "inProgress"; answer: string; retryAt: number };
+  | { phase: "pending"; answer: string; recovery: PendingRequestRecovery };
 
 export type EndReason =
   | "expired"
@@ -32,14 +35,12 @@ export type EndReason =
   | "failed";
 
 type ConfirmFailure =
-  | { kind: "unknown" }
-  | { kind: "inProgress"; retryAt: number }
+  | PendingRequestRecovery
   | { kind: "ended"; reason: EndReason };
 
 export type InitialRecovery =
-  | { kind: "inProgress"; retryAt: number }
+  | PendingRequestRecovery
   | { kind: "conflict" }
-  | { kind: "unknown" }
   | { kind: "failed"; canRestart: boolean };
 
 export type RunState =
@@ -81,6 +82,13 @@ const IDLE: RunState = { status: "idle" };
 
 function retryDeadline(retryAfter: number | null): number {
   return Date.now() + (retryAfter ?? IN_PROGRESS_RETRY_SECONDS) * 1_000;
+}
+
+function canResend(recovery: InitialRecovery): boolean {
+  return (
+    recovery.kind === "unknown" ||
+    (recovery.kind === "inProgress" && Date.now() >= recovery.retryAt)
+  );
 }
 
 function initialRecovery(error: ApiError): InitialRecovery {
@@ -244,15 +252,14 @@ export function useSearchRun(question: string | null, api: SearchApi) {
           return;
         }
 
-        const phase: ConfirmPhase =
-          failure.kind === "unknown"
-            ? { phase: "sendUnknown", answer: request.answer }
-            : {
-                phase: "inProgress",
-                answer: request.answer,
-                retryAt: failure.retryAt,
-              };
-        publish(run, { ...submitted, phase });
+        publish(run, {
+          ...submitted,
+          phase: {
+            phase: "pending",
+            answer: request.answer,
+            recovery: failure,
+          },
+        });
       }
     },
     [publish],
@@ -310,12 +317,11 @@ export function useSearchRun(question: string | null, api: SearchApi) {
         run.confirmation === null
       )
         return;
-      const trimmed = answer.trim();
-      if (
-        !trimmed ||
-        [...trimmed].length > state.confirmation.answer_max_length
-      )
-        return;
+      const checked = checkConfirmAnswer(
+        answer,
+        state.confirmation.answer_max_length,
+      );
+      if (checked.answer === null) return;
 
       const { session } = run.confirmation;
       // 답을 처음 보낼 때 세션·버전·답·키를 함께 보관한다. 수동 재전송도 이 요청을 그대로 쓴다.
@@ -325,7 +331,7 @@ export function useSearchRun(question: string | null, api: SearchApi) {
         secret: session.secret,
         version: session.version,
         action: "answer_text",
-        answer: trimmed,
+        answer: checked.answer,
       });
       run.confirmation.request = request;
       void sendConfirmation(run, state.confirmation, request);
@@ -338,23 +344,14 @@ export function useSearchRun(question: string | null, api: SearchApi) {
     // 이전 실행이나 이전 대기 화면의 클릭은 현재 화면의 요청을 보낼 권한이 없다.
     if (run === null || run.state !== state) return;
     if (state.status === "failed") {
-      const { recovery } = state;
-      if (
-        recovery.kind === "unknown" ||
-        (recovery.kind === "inProgress" && Date.now() >= recovery.retryAt)
-      )
-        void sendInitial(run);
-    } else if (state.status === "confirm" && run.confirmation?.request) {
-      const { phase } = state;
-      if (
-        phase.phase === "sendUnknown" ||
-        (phase.phase === "inProgress" && Date.now() >= phase.retryAt)
-      )
-        void sendConfirmation(
-          run,
-          state.confirmation,
-          run.confirmation.request,
-        );
+      if (canResend(state.recovery)) void sendInitial(run);
+    } else if (
+      state.status === "confirm" &&
+      state.phase.phase === "pending" &&
+      run.confirmation?.request &&
+      canResend(state.phase.recovery)
+    ) {
+      void sendConfirmation(run, state.confirmation, run.confirmation.request);
     }
   }, [state, sendInitial, sendConfirmation]);
 

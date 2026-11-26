@@ -11,12 +11,12 @@
 
 - 검색은 `POST /v1/search/stream`(SSE)이 기본이다. 해석 미리보기, 해석 카드, 결과 표, 답변 문장, 후속 질문 칩이 도착 순서대로 나타나고 `done`에서 화면이 확정된다.
 - 해석 미리보기(`interpretation_draft`)는 서버가 켠 경우에만 온다. 확정 전 값이라 최종 해석이 오면 해석 카드로 바뀐다. 없어도 화면은 같게 동작한다.
-- 스트림을 열기 전에 쓸 수 없으면 `POST /v1/search`로 한 번 대신한다. 도중에 끊기면 1초 뒤 한 번만 다시 받고, 두 번째도 끊기면 연결 실패 화면을 낸다.
+- 스트림을 열 수 없으면 `POST /v1/search`로 한 번 대신한다. 도중에 끊기면 1초 뒤 같은 키로 한 번 다시 받는다. 결과를 확인할 수 없거나 기존 요청이 처리 중이면 화면에서 같은 요청으로 다시 확인할 수 있다.
 - outcome 9종과 HTTP 429·504·5xx·연결 실패를 각각 다른 화면으로 그린다. `generated_by=fallback`이면 전용 배너를 보인다.
-- 기준 확인이 필요하면 상품 조회 없이 확인 화면이 뜨고, 답은 `POST /v1/search/confirm`으로 보낸다. 세션 secret과 답은 React 상태에만 있다.
-- 상태는 URL에만 있다. 새로고침·뒤로가기·링크 공유가 그대로 되고, 색인은 막는다.
+- 기준 확인이 필요하면 상품 조회 없이 확인 화면이 뜨고, 답은 `POST /v1/search/confirm`으로 보낸다. 브라우저는 세션 secret, 보낸 답, 재전송 키를 현재 실행의 메모리에만 둔다.
+- 질문은 결과 URL에 있으므로 브라우저 방문 기록이나 공유 링크에 남을 수 있다. 새로고침하면 새 검색으로 시작하고, 검색엔진 색인은 막는다.
 
-화면 상태와 재시도 규칙은 `src/lib/searchStream.ts`, `src/lib/useSearchRun.ts`, `src/lib/sse.ts`, `src/lib/useConfirmSubmit.ts`의 설명에 있다. 해석·답변 설명 규칙은 `src/lib/explain.ts`에 있다.
+화면 상태와 재시도 규칙은 `src/lib/useSearchRun.ts`, `src/lib/searchStream.ts`, `src/lib/sse.ts`의 설명에 있다. 해석·답변 설명 규칙은 `src/lib/explain.ts`에 있다.
 
 ## 로컬 실행
 
@@ -56,7 +56,7 @@ VITE_API_MODE=real VITE_LOCAL_API_TARGET=http://127.0.0.1:18080 npm run dev   # 
 | 모델             | 답 생성 시한 초과, `generated_by=fallback` |
 | 전체 시한        | 표 뒤에 `error`(timeout) 이벤트 → 504 화면 |
 | 끊김             | 첫 요청만 끊김 → 1초 뒤 재시도 → 정상      |
-| 계속 끊김        | 재시도도 끊겨 연결 실패 화면               |
+| 계속 끊김        | 재시도도 끊겨 같은 요청으로 다시 확인      |
 | 스트림 불가      | `POST /v1/search`로 대신함                 |
 | 미리보기 없음    | `interpretation_draft` 없이 보냄           |
 

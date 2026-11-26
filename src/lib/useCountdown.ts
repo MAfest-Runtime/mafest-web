@@ -23,7 +23,12 @@ export function useCountdown(seconds: number | null): number {
 export function useDeadlineCountdown(retryAt: number | null): number {
   const [, redraw] = useState(0);
   useEffect(() => {
-    if (retryAt === null || Date.now() >= retryAt) return;
+    if (retryAt === null) return;
+    if (Date.now() >= retryAt) {
+      // 렌더 뒤 효과가 실행되기 전에 기한이 지났다면 잠긴 버튼을 다시 그린다.
+      redraw((tick) => tick + 1);
+      return;
+    }
     const timer = setInterval(() => {
       redraw((tick) => tick + 1);
       if (Date.now() >= retryAt) clearInterval(timer);

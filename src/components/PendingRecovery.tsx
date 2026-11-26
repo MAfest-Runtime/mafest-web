@@ -1,12 +1,15 @@
-import { useId, useLayoutEffect, useRef, type RefObject } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  type MouseEventHandler,
+  type RefObject,
+} from "react";
 import { useDeadlineCountdown } from "../lib/useCountdown";
+import type { PendingRequestRecovery } from "../lib/useSearchRun";
 import { Icon } from "./Icon";
 
 export const IN_PROGRESS_TITLE = "기존 요청을 처리하고 있습니다";
-
-type PendingState =
-  | { kind: "inProgress"; retryAt: number }
-  | { kind: "unknown" };
 
 export function SentAnswer({ answer }: { answer: string }) {
   return (
@@ -26,11 +29,11 @@ export function PendingRecovery({
   onResend,
   onRewrite,
 }: {
-  state: PendingState;
+  state: PendingRequestRecovery;
   answer?: string;
   focusFrom?: RefObject<HTMLElement | null>;
   requestId?: string | null;
-  onResend: () => void;
+  onResend: MouseEventHandler<HTMLButtonElement>;
   onRewrite?: () => void;
 }) {
   const titleId = useId();
