@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type RefObject } from "react";
 import { QUESTION_MAX } from "../lib/types";
 import { Icon } from "./Icon";
 
@@ -8,11 +8,13 @@ import { Icon } from "./Icon";
  */
 export function SearchBox({
   initial = "",
+  inputRef,
   onSubmit,
   autoFocus = false,
   size = "regular",
 }: {
   initial?: string;
+  inputRef?: RefObject<HTMLInputElement | null>;
   onSubmit: (question: string) => void;
   autoFocus?: boolean;
   size?: "regular" | "large";
@@ -48,6 +50,7 @@ export function SearchBox({
         <Icon name="search" size={size === "large" ? 22 : 18} />
       </span>
       <input
+        ref={inputRef}
         id={inputId}
         className="searchbox__input"
         type="text"

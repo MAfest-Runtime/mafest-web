@@ -9,7 +9,7 @@ import { useElapsed } from "../lib/useElapsed";
  * 최종 해석(interpretation)이 오면 호출한 쪽이 이 자리를 InterpretationCard 로 바꾼다.
  *
  * `question` 은 start 이벤트의 질문이어야 한다 — draft 구간 위치가 그 문자열의 코드 포인트 기준이기 때문이다.
- * 스크린리더에는 요약 문장 하나만 읽히게 하고(draft 가 올 때마다 전체를 읽지 않도록) 나머지는 live 영역 밖에 둔다.
+ * 미리보기는 올 때마다 바뀌므로 본문에만 표시한다. 단계가 바뀌면 검색 화면의 live 영역에서 한 번 알린다.
  */
 export function InterpretationDraft({
   question,
@@ -28,12 +28,11 @@ export function InterpretationDraft({
       aria-labelledby="draft-heading"
     >
       <h2 id="draft-heading" className="interp__title">
-        질문을 해석하는 중 <span className="num muted">· {elapsed}초</span>
+        질문을 해석하는 중{" "}
+        <span className="num muted" aria-hidden="true">
+          · {elapsed}초
+        </span>
       </h2>
-      <p className="visually-hidden" role="status" aria-live="polite">
-        상품군 {draft.domains.length}개, 질문 구간 {draft.spans.length}곳 확인
-        중
-      </p>
 
       <p className="interp__question">
         {segments.map((segment, i) =>
