@@ -5,9 +5,9 @@ import {
   METHOD_LABEL,
   questionSegments,
   SLOT_LABEL,
+  type DomainViewInput,
 } from "../lib/explain";
 import { formatCount } from "../lib/format";
-import type { SearchResponse } from "../lib/types";
 
 /**
  * 질문 해석. 두 가지를 보여준다.
@@ -18,7 +18,11 @@ import type { SearchResponse } from "../lib/types";
  *
  * 결과 위 필터 UI는 두지 않는다 — 조건을 바꾸려면 질문을 고친다(37 4-2).
  */
-export function InterpretationCard({ response }: { response: SearchResponse }) {
+export function InterpretationCard({
+  response,
+}: {
+  response: DomainViewInput & { question: string };
+}) {
   const it = response.interpretation;
   const { active, setActive } = useMappingFocus();
   const hasMappings = it.mappings.length > 0;

@@ -1,5 +1,6 @@
 import {
   EXPLAIN_AXES_MAX,
+  isTableOutcome,
   type ExplainRequest,
   type SearchResponse,
 } from "./types";
@@ -13,8 +14,7 @@ import {
 export function explainRequestFor(
   response: SearchResponse,
 ): ExplainRequest | null {
-  if (response.outcome !== "answered" && response.outcome !== "caveat")
-    return null;
+  if (!isTableOutcome(response.outcome)) return null;
   if (response.results.length === 0) return null;
   const { domains, conditions, sort } = response.interpretation;
   const keys = [...new Set(domains.map((d) => d.domain))];

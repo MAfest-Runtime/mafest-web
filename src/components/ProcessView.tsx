@@ -1,6 +1,7 @@
 import { buildPipeline, timingSegments } from "../lib/explain";
 import { formatCount, formatMs } from "../lib/format";
-import type { SearchResponse, TraceStage } from "../lib/types";
+import type { ProcessPresentation } from "../lib/searchPresentation";
+import type { TraceStage } from "../lib/types";
 import { Stepper } from "./Stepper";
 
 const STAGE_LABEL: Record<TraceStage, string> = {
@@ -20,10 +21,8 @@ const STAGE_LABEL: Record<TraceStage, string> = {
  * 위: 5단계 표시(해석→조회→판정→생성→검증) + 판정 설명, 가운데: 단계별 시간 막대,
  * 아래(접힘): 서버가 준 세부 기록과, 공개 설정일 때만 오는 쿼리 원문.
  */
-export function ProcessView({ response }: { response: SearchResponse }) {
+export function ProcessView({ response }: { response: ProcessPresentation }) {
   const { trace } = response;
-  // 대체 답변의 실패 사유는 API 진단에만 남기고 사용자 화면에는 노출하지 않는다.
-  if (!trace || response.answer.generated_by === "fallback") return null;
   const pipeline = buildPipeline(response);
   const segments = timingSegments(pipeline);
   const meta = [

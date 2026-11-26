@@ -1,5 +1,5 @@
-import { explainRequestFor } from "./concepts";
-import type { ConceptTopic, SearchApi, SearchResponse } from "./types";
+import type { ConceptRequest } from "./searchPresentation";
+import type { ConceptTopic, ExplainResponse, SearchApi } from "./types";
 import { useRequest } from "./useRequest";
 
 /**
@@ -15,19 +15,18 @@ export interface Concepts {
  * 최종 검색 응답 하나에 설명을 **한 번만** 요청한다.
  * - 요청 key는 응답의 request_id다. 같은 응답이면 다시 렌더돼도 다시 요청하지 않고, 새 검색(새 request_id)이면
  *   이전 요청을 끊고(AbortController) 늦게 온 이전 응답을 버린다.
- * - `enabled`가 거짓(스트리밍 중인 임시 응답)이면 요청하지 않는다.
+ * - 표시 모듈이 개념 설명을 요청할 응답을 골랐을 때만 호출한다.
  * - 설명 실패는 검색을 다시 실행하지 않는다. 재시도도 없다.
  * - 펼치기 같은 화면 조작은 이 훅과 무관하다(상세 설명은 응답에 이미 있다).
  */
 export function useConcepts(
-  response: SearchResponse,
-  enabled: boolean,
+  request: ConceptRequest | null,
   api: Pick<SearchApi, "explain"> | undefined,
 ): Concepts {
-  const body = enabled && api ? explainRequestFor(response) : null;
-  const { state } = useRequest(
-    body === null ? null : `explain:${response.request_id}`,
-    (signal) => (api as Pick<SearchApi, "explain">).explain(body!, signal),
+  const { state } = useRequest<ExplainResponse>(
+    request && api ? `explain:${request.requestId}` : null,
+    // useRequest는 키가 null인 경우 로더를 부르지 않는다.
+    (signal) => api!.explain(request!.body, signal),
   );
   return {
     topics: state.status === "done" ? state.data.topics : [],

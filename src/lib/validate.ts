@@ -14,6 +14,7 @@ import {
   GRAPH_EDGE_KINDS,
   GRAPH_NODE_KINDS,
   GRAPH_STATES,
+  isTableOutcome,
   MAPPING_METHODS,
   MAPPING_SLOTS,
   OUTCOMES,
@@ -174,9 +175,6 @@ function validateClarify(v: unknown, path: string): void {
   str(clarify.reason, `${path}.reason`);
   options(clarify.options, `${path}.options`, 2, 4);
 }
-
-/** 표를 내는 outcome. 나머지는 results가 반드시 비어 있다(명세 §2-3). */
-const TABLE_OUTCOMES: ReadonlySet<string> = new Set(["answered", "caveat"]);
 
 function validateAnswer(v: unknown): void {
   if (!validateAnswerStructure(v))
@@ -437,7 +435,7 @@ export function validateSearchResponse(input: unknown): SearchResponse {
   validateInterpretation(r.interpretation);
 
   const results = arr(r.results, "results");
-  if (results.length > 0 && !TABLE_OUTCOMES.has(outcome))
+  if (results.length > 0 && !isTableOutcome(outcome))
     throw new ContractError("results");
   results.forEach((g, gi) => validateResultGroup(g, `results[${gi}]`));
 
@@ -737,7 +735,7 @@ export function validateStreamEvent(
       ]);
       const outcome = oneOf(d.outcome, OUTCOMES, "results.outcome");
       const results = arr(d.results, "results.results");
-      if (results.length > 0 && !TABLE_OUTCOMES.has(outcome))
+      if (results.length > 0 && !isTableOutcome(outcome))
         throw new ContractError("results.results");
       results.forEach((g, gi) =>
         validateResultGroup(g, `results.results[${gi}]`),
