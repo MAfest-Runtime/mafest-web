@@ -13,16 +13,9 @@ import {
   SearchUnknown,
   SearchLoading,
 } from "../components/StatusViews";
-import { useConfirmSubmit } from "../lib/useConfirmSubmit";
 import { productHref, searchHref } from "../lib/format";
 import { provisionalResponse, streamPhase } from "../lib/searchStream";
-import {
-  ApiError,
-  isSearchConflict,
-  isSearchUnknown,
-  QUESTION_MAX,
-  type SearchApi,
-} from "../lib/types";
+import { ApiError, QUESTION_MAX, type SearchApi } from "../lib/types";
 import { useMediaQuery, WIDE_QUERY } from "../lib/useMediaQuery";
 import { useSearchRun } from "../lib/useSearchRun";
 
@@ -41,16 +34,10 @@ export function SearchRoute({ api }: { api: SearchApi }) {
 
   useTitle(question);
 
-  const { state, retry, resend } = useSearchRun(tooLong ? null : question, api);
-  // 서버가 최초 검색에서 기준 확인을 요구하면(state.status === "confirm") 같은 응답이 곧 확인 대기다.
-  // 별도 확인 시작 요청이나 두 번째 해석 요청은 없고, 대기 중에는 조회·요약·개념 설명도 시작하지 않는다.
-  const confirming = state.status === "confirm" ? state : null;
-  const confirmRun = useConfirmSubmit(
-    confirming?.runId ?? null,
-    confirming?.confirmation ?? null,
+  const { state, startNewSearch, submitAnswer, resend } = useSearchRun(
+    tooLong ? null : question,
     api,
   );
-  const gate = confirmRun.state;
   // 스트리밍 중에는 지금까지 받은 것으로 임시 응답을 만들어 같은 화면으로 그린다.
   const streaming =
     state.status === "streaming" && question !== null
@@ -73,11 +60,7 @@ export function SearchRoute({ api }: { api: SearchApi }) {
     if (question) setParams({ q: question });
   };
 
-  const showPanel =
-    wide &&
-    selected !== null &&
-    (state.status === "done" ||
-      (confirming !== null && gate.phase === "resumed"));
+  const showPanel = wide && selected !== null && state.status === "done";
 
   return (
     <div className={`results ${showPanel ? "results--panel" : ""}`}>
@@ -113,63 +96,51 @@ export function SearchRoute({ api }: { api: SearchApi }) {
                 retrying={state.view.retrying}
               />
             ))}
-          {confirming !== null &&
-            (gate.phase === "awaiting" ||
-              gate.phase === "submitting" ||
-              gate.phase === "sendUnknown" ||
-              gate.phase === "inProgress") && (
-              <ConfirmView
-                key={confirming.runId}
-                confirmation={confirming.confirmation}
-                state={gate}
-                onSubmit={confirmRun.submit}
-                onResend={confirmRun.resend}
-                onRewrite={() => navigate("/")}
-              />
-            )}
-          {confirming !== null && gate.phase === "ended" && (
-            <ConfirmEnded
-              reason={gate.reason}
-              onRestart={retry}
+          {state.status === "confirm" && (
+            <ConfirmView
+              key={state.runId}
+              confirmation={state.confirmation}
+              state={state.phase}
+              onSubmit={submitAnswer}
+              onResend={resend}
               onRewrite={() => navigate("/")}
             />
           )}
-          {confirming !== null && gate.phase === "resumed" && (
-            <OutcomeView
-              key={`confirm-${confirming.runId}`}
-              response={gate.response}
-              selectedId={selected?.productId ?? null}
-              onOpen={(domain, row) => openProduct(domain, row.product_id)}
-              onRetry={retry}
-              api={api}
-            />
-          )}
-          {state.status === "failed" && isSearchConflict(state.error) && (
-            <SearchConflict
-              key={`${question}-${state.error.code}`}
-              error={state.error}
-              onResend={resend}
-              onNewSearch={retry}
-            />
-          )}
-          {state.status === "failed" && isSearchUnknown(state.error) && (
-            <SearchUnknown
-              key={`${question}-${state.error.code}`}
-              error={state.error}
-              onResend={resend}
+          {state.status === "confirmEnded" && (
+            <ConfirmEnded
+              reason={state.reason}
+              onRestart={state.canRestart ? startNewSearch : undefined}
+              onRewrite={() => navigate("/")}
             />
           )}
           {state.status === "failed" &&
-            !isSearchConflict(state.error) &&
-            !isSearchUnknown(state.error) && (
-              <RequestFailed error={state.error} onRetry={retry} />
+            (state.recovery.kind === "inProgress" ||
+              state.recovery.kind === "conflict") && (
+              <SearchConflict
+                error={state.error}
+                retryAt={
+                  state.recovery.kind === "inProgress"
+                    ? state.recovery.retryAt
+                    : null
+                }
+                onResend={resend}
+                onNewSearch={startNewSearch}
+              />
             )}
+          {state.status === "failed" && state.recovery.kind === "unknown" && (
+            <SearchUnknown error={state.error} onResend={resend} />
+          )}
+          {state.status === "failed" && state.recovery.kind === "failed" && (
+            <RequestFailed
+              error={state.error}
+              onRetry={state.recovery.canRestart ? startNewSearch : undefined}
+            />
+          )}
           {state.status === "streaming" &&
             state.view.retrying &&
             shown !== null && <RetryingNotice />}
           {shown !== null &&
-            state.status !== "failed" &&
-            state.status !== "idle" && (
+            (state.status === "streaming" || state.status === "done") && (
               <OutcomeView
                 key={state.runId}
                 response={shown}
@@ -183,7 +154,7 @@ export function SearchRoute({ api }: { api: SearchApi }) {
                 }
                 selectedId={selected?.productId ?? null}
                 onOpen={(domain, row) => openProduct(domain, row.product_id)}
-                onRetry={retry}
+                onRetry={startNewSearch}
                 api={api}
               />
             )}

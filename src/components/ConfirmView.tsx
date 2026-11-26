@@ -1,16 +1,12 @@
 import { useId, useState, type FormEvent } from "react";
-import type { ConfirmPhase, EndReason } from "../lib/useConfirmSubmit";
-import type { ConfirmationRequired } from "../lib/types";
+import type { ConfirmForm, ConfirmPhase, EndReason } from "../lib/useSearchRun";
 import { Icon } from "./Icon";
-import { useCountdown } from "../lib/useCountdown";
+import { useDeadlineCountdown } from "../lib/useCountdown";
 
 /** 글자 수는 서버(Python)와 같게 유니코드 코드 포인트로 센다. UTF-16 길이로 세면 이모지에서 어긋난다. */
 function codePointLength(text: string): number {
   return [...text].length;
 }
-
-/** 답을 보낼 수 있는 상태에서만 입력을 연다. 그 밖에는 이미 보낸 답을 읽기 전용으로 보여 준다. */
-type OpenPhase = Exclude<ConfirmPhase, { phase: "resumed" | "ended" }>;
 
 /**
  * 기준 확인 화면. 원래 질문·이미 읽은 조건·확인할 기준은 서버가 준 값을 그대로 보여 준다.
@@ -24,8 +20,8 @@ export function ConfirmView({
   onResend,
   onRewrite,
 }: {
-  confirmation: ConfirmationRequired;
-  state: OpenPhase;
+  confirmation: ConfirmForm;
+  state: ConfirmPhase;
   onSubmit: (answer: string) => void;
   onResend: () => void;
   onRewrite: () => void;
@@ -36,11 +32,11 @@ export function ConfirmView({
   // 이미 보낸 답이 있으면(전송 불명·처리 중·제출 중) 그 답을 보여 주고 바꿀 수 없게 한다.
   // 답을 바꿔도 재전송은 처음 답을 보내므로, 바꿀 수 있는 것처럼 보이면 안 된다.
   const locked = state.phase !== "awaiting";
-  const shown = locked ? state.request.answer : draft;
+  const shown = locked ? state.answer : draft;
   const trimmed = draft.trim();
   const length = codePointLength(trimmed);
   const tooLong = length > confirmation.answer_max_length;
-  const canAnswer = confirmation.actions.includes("answer_text");
+  const canAnswer = confirmation.canAnswer;
   const canSubmit = !locked && trimmed !== "" && !tooLong;
 
   function submitAnswer(event: FormEvent) {
@@ -83,7 +79,7 @@ export function ConfirmView({
         </div>
       )}
       {state.phase === "inProgress" && (
-        <InProgressNotice retryAfter={state.retryAfter} onResend={onResend} />
+        <InProgressNotice retryAt={state.retryAt} onResend={onResend} />
       )}
 
       <form className="confirm__form" onSubmit={submitAnswer}>
@@ -149,13 +145,13 @@ export function ConfirmView({
 
 /** 서버가 같은 요청을 아직 처리 중일 때. Retry-After 뒤에 사용자가 직접 같은 요청을 다시 보낸다. */
 function InProgressNotice({
-  retryAfter,
+  retryAt,
   onResend,
 }: {
-  retryAfter: number | null;
+  retryAt: number;
   onResend: () => void;
 }) {
-  const left = useCountdown(retryAfter);
+  const left = useDeadlineCountdown(retryAt);
   return (
     <div className="banner banner--warn" role="status">
       <Icon name="refresh" size={16} />
@@ -205,7 +201,7 @@ export function ConfirmEnded({
   onRewrite,
 }: {
   reason: EndReason;
-  onRestart: () => void;
+  onRestart?: () => void;
   onRewrite: () => void;
 }) {
   const message = END_MESSAGES[reason];
@@ -214,7 +210,7 @@ export function ConfirmEnded({
       <h2>{message.title}</h2>
       <p>{message.body}</p>
       <div className="confirm__actions">
-        {reason !== "unsupported" && (
+        {onRestart && (
           <button type="button" className="button" onClick={onRestart}>
             새 검색으로 시작
           </button>

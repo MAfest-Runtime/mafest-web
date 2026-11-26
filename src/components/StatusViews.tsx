@@ -1,6 +1,6 @@
-import { useCountdown } from "../lib/useCountdown";
+import { useCountdown, useDeadlineCountdown } from "../lib/useCountdown";
 import { useElapsed } from "../lib/useElapsed";
-import { IN_PROGRESS_RETRY_SECONDS, type ApiError } from "../lib/types";
+import type { ApiError } from "../lib/types";
 import { Icon } from "./Icon";
 
 /**
@@ -132,17 +132,17 @@ export function SearchUnknown({
  */
 export function SearchConflict({
   error,
+  retryAt,
   onResend,
   onNewSearch,
 }: {
   error: ApiError;
+  retryAt: number | null;
   onResend: () => void;
   onNewSearch: () => void;
 }) {
-  const waiting = error.code === "turn_in_progress";
-  const left = useCountdown(
-    waiting ? (error.retryAfter ?? IN_PROGRESS_RETRY_SECONDS) : null,
-  );
+  const waiting = retryAt !== null;
+  const left = useDeadlineCountdown(retryAt);
   const message = waiting
     ? {
         title: "기존 요청을 처리하고 있습니다",
