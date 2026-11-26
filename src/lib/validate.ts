@@ -818,36 +818,37 @@ function isTerminalEvent(name: string): boolean {
   );
 }
 
+type StreamInputEvent = { event: unknown; data: unknown };
+
 /**
- * 끝난 스트림 전체를 검사한다. 각 이벤트 data 는 validateStreamEvent 로, 순서는 다음 규칙으로 본다.
+ * SSE 연결 하나의 이벤트를 도착 순서대로 검사한다. 전체 시퀀스 검사도 같은 규칙을 쓴다.
  * - start 가 먼저 온다. done·error·confirmation_required 로 끝나고, 그 뒤에는 이벤트가 없다.
  * - interpretation_draft 는 선택이며 start 다음·interpretation 앞에서만 0회 이상 온다. interpretation 뒤에는 올 수 없다.
  *   각 span 은 start 이벤트의 question 을 코드 포인트로 잘랐을 때 text 와 같아야 한다.
  * - confirmation_required 는 start·interpretation_draft·interpretation 바로 뒤에서만 오며 results 이후에는 올 수 없다.
- * - error 는 어느 자리에서든 한 번 올 수 있고 스트림을 끝낸다.
+ * - error 는 start 뒤 어느 단계에서든 스트림을 끝낼 수 있다.
  * - 나머지는 start → interpretation_draft* → interpretation → results → answer_delta* → answer_done → suggestions → done
  *   순서이며 (draft 와 answer_delta 외에는) 건너뛰지 않는다. 그래서 results 앞에 answer_delta 가 올 수 없다.
  * - answer_delta.index 는 0 부터 하나씩 늘어난다.
  */
-export function validateStream(
-  events: ReadonlyArray<{ event: unknown; data: unknown }>,
-): StreamEvent[] {
-  if (events.length === 0) throw new ContractError("stream");
-  const checked: StreamEvent[] = [];
+export function createStreamValidator() {
   let mappings: unknown = [];
   let questionPoints: string[] = [];
   let position = -1;
   let nextDelta = 0;
-  events.forEach((item, i) => {
-    const path = `stream[${i}]`;
-    if (i > 0) {
-      const last = checked[checked.length - 1];
-      if (isTerminalEvent(last.event)) throw new ContractError(path);
-    }
+  let receivedCount = 0;
+  let finished = false;
+
+  function accept(item: StreamInputEvent): StreamEvent {
+    const path = `stream[${receivedCount}]`;
+    if (finished) throw new ContractError(path);
+
     const event = validateStreamEvent(item.event, item.data, mappings);
-    if (i === 0 && event.event !== "start") throw new ContractError(path);
+    if (receivedCount === 0 && event.event !== "start")
+      throw new ContractError(path);
+
+    let nextPosition = position;
     if (event.event === "confirmation_required") {
-      // 확인 대기는 start(또는 interpretation) 바로 뒤에서만 스트림을 끝낸다. results 이후에는 올 수 없다.
       if (
         position !== STREAM_ORDER.start &&
         position !== STREAM_ORDER.interpretation_draft &&
@@ -873,26 +874,43 @@ export function validateStream(
         order !== position + 1
       )
         throw new ContractError(path);
-      position = order;
+      nextPosition = order;
     }
-    if (event.event === "start")
-      questionPoints = Array.from(event.data.question);
     if (event.event === "interpretation_draft") {
       event.data.spans.forEach((span, si) => {
         if (!sliceMatches(questionPoints, span.start, span.end, span.text))
           throw new ContractError(`${path}.spans[${si}]`);
       });
     }
+    if (event.event === "answer_delta" && event.data.index !== nextDelta)
+      throw new ContractError(`${path}.index`);
+
+    // 검증에 성공한 이벤트만 다음 이벤트의 순서와 맥락에 영향을 준다.
+    position = nextPosition;
+    receivedCount += 1;
+    finished = isTerminalEvent(event.event);
+    if (event.event === "start")
+      questionPoints = Array.from(event.data.question);
     if (event.event === "interpretation")
       mappings = event.data.interpretation.mappings;
-    if (event.event === "answer_delta") {
-      if (event.data.index !== nextDelta)
-        throw new ContractError(`${path}.index`);
-      nextDelta += 1;
-    }
-    checked.push(event);
-  });
-  if (!isTerminalEvent(checked[checked.length - 1].event))
-    throw new ContractError("stream");
+    if (event.event === "answer_delta") nextDelta += 1;
+    return event;
+  }
+
+  return {
+    accept,
+    get finished() {
+      return finished;
+    },
+  };
+}
+
+/** 완성된 시퀀스에는 종료 이벤트가 있어야 한다. 실시간 수신의 조기 EOF는 연결 끊김으로 처리한다. */
+export function validateStream(
+  events: readonly StreamInputEvent[],
+): StreamEvent[] {
+  const validator = createStreamValidator();
+  const checked = events.map(validator.accept);
+  if (!validator.finished) throw new ContractError("stream");
   return checked;
 }

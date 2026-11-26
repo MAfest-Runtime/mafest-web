@@ -96,6 +96,7 @@ export async function* parseSse(
     }
   } finally {
     if (idleTimer !== undefined) clearTimeout(idleTimer);
-    await reader.cancel().catch(() => undefined);
+    // 읽기는 즉시 취소하고, 전송 쪽의 정리가 늦어도 확정된 결과는 전달한다.
+    void reader.cancel().catch(() => undefined);
   }
 }
