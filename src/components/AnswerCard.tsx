@@ -1,12 +1,13 @@
 import { rowDomId, useCiteFocus } from "../lib/citeFocus";
 import { linkAnswer, type CiteTarget } from "../lib/explain";
 import { baseDateSummary, GENERATED_LABEL } from "../lib/format";
-import type { SearchResponse } from "../lib/types";
+import type { DisplayedAnswer } from "../lib/searchPresentation";
+import type { InterpretedDomain, ResultGroup } from "../lib/types";
 import { Icon } from "./Icon";
 
 /** 기준일 배지. 상품군마다 다르면 나열한다. */
-export function BaseDates({ response }: { response: SearchResponse }) {
-  const dates = baseDateSummary(response.interpretation.domains);
+export function BaseDates({ domains }: { domains: InterpretedDomain[] }) {
+  const dates = baseDateSummary(domains);
   if (dates.length === 0) return null;
   return (
     <span className="base-dates">
@@ -24,48 +25,52 @@ export function BaseDates({ response }: { response: SearchResponse }) {
  * 내부 대체 경로는 배지로 알리지 않으며, AI 생성 문장으로도 표시하지 않는다.
  */
 export function AnswerCard({
-  response,
-  sentences,
-  retrying = false,
+  answer,
+  caveat,
+  domains,
+  results,
 }: {
-  response: SearchResponse;
-  /** 스트리밍 중에 지금까지 받은 문장. 없으면 완성된 답이다. */
-  sentences?: string[];
-  retrying?: boolean;
+  answer: DisplayedAnswer;
+  caveat: boolean;
+  domains: InterpretedDomain[];
+  results: ResultGroup[];
 }) {
-  const { answer, outcome } = response;
+  const completed = answer.kind === "complete" ? answer.answer : null;
   return (
     <section className="answer card" aria-labelledby="answer-heading">
       <header className="answer__head">
         <h2 id="answer-heading">답변</h2>
         <span className="answer__badges">
-          {outcome === "caveat" && (
+          {caveat && (
             <span className="badge badge--warn">
               <Icon name="alert" size={14} />
               주의
             </span>
           )}
-          {answer.generated_by !== "fallback" && (
+          {completed && completed.generated_by !== "fallback" && (
             <span className="badge badge--plain">
-              {GENERATED_LABEL[answer.generated_by]}
+              {GENERATED_LABEL[completed.generated_by]}
             </span>
           )}
-          <BaseDates response={response} />
+          <BaseDates domains={domains} />
         </span>
       </header>
-      {sentences ? (
-        <StreamingText sentences={sentences} retrying={retrying} />
+      {answer.kind === "writing" ? (
+        <StreamingText
+          sentences={answer.sentences}
+          retrying={answer.retrying}
+        />
       ) : (
-        <AnswerText response={response} />
+        <AnswerText text={answer.answer.text} results={results} />
       )}
-      {answer.notices.length > 0 && (
+      {completed && completed.notices.length > 0 && (
         <ul
-          className={`notices ${outcome === "caveat" ? "notices--warn" : ""}`}
-          aria-label={outcome === "caveat" ? "주의 사유" : "안내"}
+          className={`notices ${caveat ? "notices--warn" : ""}`}
+          aria-label={caveat ? "주의 사유" : "안내"}
         >
-          {answer.notices.map((notice) => (
+          {completed.notices.map((notice) => (
             <li key={notice.code + notice.text}>
-              <Icon name={outcome === "caveat" ? "alert" : "info"} size={15} />
+              <Icon name={caveat ? "alert" : "info"} size={15} />
               <span>{notice.text}</span>
             </li>
           ))}
@@ -110,9 +115,15 @@ function StreamingText({
  * 답변 문장. 인용 상품의 이름과 숫자가 표의 값과 정확히 같으면 밑줄로 잇는다.
  * 마우스·키보드 초점을 주면 표의 그 칸이 강조되고, 누르면 그 행으로 스크롤한다.
  */
-function AnswerText({ response }: { response: SearchResponse }) {
+function AnswerText({
+  text,
+  results,
+}: {
+  text: string;
+  results: ResultGroup[];
+}) {
   const { focus, setFocus } = useCiteFocus();
-  const segments = linkAnswer(response.answer.text, response.results);
+  const segments = linkAnswer(text, results);
   const linked = segments.some((s) => s.cite);
   const same = (a: CiteTarget | null, b: CiteTarget) =>
     a !== null &&

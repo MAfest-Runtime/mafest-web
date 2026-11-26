@@ -16,7 +16,7 @@
 - 기준 확인이 필요하면 상품 조회 없이 확인 화면이 뜨고, 답은 `POST /v1/search/confirm`으로 보낸다. 브라우저는 세션 secret, 보낸 답, 재전송 키를 현재 실행의 메모리에만 둔다.
 - 질문은 결과 URL에 있으므로 브라우저 방문 기록이나 공유 링크에 남을 수 있다. 새로고침하면 새 검색으로 시작하고, 검색엔진 색인은 막는다.
 
-화면 상태와 재시도 규칙은 `src/lib/useSearchRun.ts`, `src/lib/searchStream.ts`, `src/lib/sse.ts`의 설명에 있다. 해석·답변 설명 규칙은 `src/lib/explain.ts`에 있다.
+검색 실행과 재시도 규칙은 `src/lib/useSearchRun.ts`, `src/lib/searchStream.ts`, `src/lib/sse.ts`의 설명에 있다. 미리보기·표·답변·진행 안내의 표시 규칙은 `src/lib/searchPresentation.ts`에 있다. 해석·답변 설명 규칙은 `src/lib/explain.ts`에 있다.
 
 ## 로컬 실행
 
@@ -72,7 +72,7 @@ VITE_API_MODE=real VITE_LOCAL_API_TARGET=http://127.0.0.1:18080 npm run dev   # 
 - mafest-agent는 이 파일을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 정본과 바이트 단위로 같아야 한다.
 - 웹 쪽 구현은 `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사)다. 응답이 계약과 다르면 "응답 형식 오류"로 보인다.
 - yaml을 고치면 types·validate·픽스처를 함께 고친다.
-- `Answer`나 참조 스키마를 바꿨다면 `npm run contract:generate-answer`로 검증기를 다시 생성한다. 개발 서버, 타입 검사, 운영 빌드는 정본에서 다시 생성한 결과와 체크아웃에 포함된 검증기가 일치하는지 확인한다.
+- `Answer`, `ExplainResponse` 또는 참조 스키마를 바꿨다면 `npm run contract:generate`로 검증기를 다시 생성한다. 개발 서버, 타입 검사, 운영·컨테이너 빌드는 정본에서 다시 생성한 결과와 체크아웃에 포함된 검증기가 일치하는지 확인한다.
 
 ## 배포
 

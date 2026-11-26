@@ -58,19 +58,29 @@ const STATUS_VIEW: Record<EvidenceStatus, { label: string; tone: Tone }> = {
   AMBIGUOUS: { label: "확인 필요", tone: "info" },
 };
 
+export type DomainViewInput = Pick<
+  SearchResponse,
+  "interpretation" | "results"
+> & {
+  outcome: Outcome | null;
+  answer: SearchResponse["answer"] | null;
+};
+
 /**
  * AXIS_ABSENT는 "수집 범위 밖"(영구)과 "장애"(일시)를 함께 담는다. 계약에 absent_kind가
  * 없으므로 outcome=unavailable이거나 STORE_BLOCKED notice가 그 상품군을 가리키면 장애로 본다.
  */
-function isBlocked(response: SearchResponse, d: InterpretedDomain): boolean {
+function isBlocked(response: DomainViewInput, d: InterpretedDomain): boolean {
   if (d.status !== "AXIS_ABSENT") return false;
   if (response.outcome === "unavailable") return true;
-  return response.answer.notices.some(
-    (n) => n.code === "STORE_BLOCKED" && n.text.includes(d.label),
+  return (
+    response.answer?.notices.some(
+      (n) => n.code === "STORE_BLOCKED" && n.text.includes(d.label),
+    ) ?? false
   );
 }
 
-export function domainViews(response: SearchResponse): DomainView[] {
+export function domainViews(response: DomainViewInput): DomainView[] {
   return response.interpretation.domains.map((d) => {
     const group = response.results.find((g) => g.domain === d.domain);
     if (isBlocked(response, d))

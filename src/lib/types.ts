@@ -30,6 +30,12 @@ export const OUTCOMES = [
   "error",
 ] as const;
 export type Outcome = (typeof OUTCOMES)[number];
+export type TableOutcome = "answered" | "caveat";
+
+/** 계약에서 상품 표를 허용하는 결과다. 집계 답변의 표는 비어 있을 수 있다. */
+export function isTableOutcome(outcome: Outcome): outcome is TableOutcome {
+  return outcome === "answered" || outcome === "caveat";
+}
 
 export const EVIDENCE_STATUSES = [
   "FOUND",
@@ -474,9 +480,7 @@ export interface ExplainResponse {
   topics: ConceptTopic[];
 }
 
-/** 설명 주제 상한. */
-export const CONCEPT_TOPICS_MAX = 2;
-export const CONCEPT_SOURCES_MAX = 3;
+/** 개념 설명 요청의 상품군·조건 축 상한. */
 export const EXPLAIN_DOMAINS_MAX = 6;
 export const EXPLAIN_AXES_MAX = 12;
 

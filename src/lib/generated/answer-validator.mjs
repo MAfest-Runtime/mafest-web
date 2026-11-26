@@ -1,4 +1,4 @@
-// OpenAPI 정본에서 생성한다. npm run contract:generate-answer
+// OpenAPI 정본에서 생성한다. npm run contract:generate
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __commonJS = (cb, mod) =>
   function __require() {

@@ -7,14 +7,16 @@
     "node": ">=22.23.1 <23"
   },
   "scripts": {
-    "dev": "npm run contract:check-answer && vite",
-    "build": "npm run contract:check-answer && tsc -b && vite build",
+    "dev": "npm run contract:check && vite",
+    "build": "npm run contract:check && tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "typecheck": "npm run contract:check-answer && tsc -b --pretty false",
-    "contract:generate-answer": "node scripts/generate-answer-validator.mjs",
-    "contract:check-answer": "node scripts/generate-answer-validator.mjs --check",
+    "typecheck": "npm run contract:check && tsc -b --pretty false",
+    "contract:generate": "node scripts/generate-response-validators.mjs",
+    "contract:check": "node scripts/generate-response-validators.mjs --check",
+    "contract:generate-answer": "node scripts/generate-response-validators.mjs Answer",
+    "contract:check-answer": "node scripts/generate-response-validators.mjs Answer --check",
     "fonts:generate": "node scripts/generate-font-css.mjs && prettier --write src/styles/fonts.css"
   },
   "dependencies": {

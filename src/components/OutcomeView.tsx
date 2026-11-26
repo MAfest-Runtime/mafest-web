@@ -1,8 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { CiteFocusContext, MappingFocusContext } from "../lib/citeFocus";
 import type { CiteTarget } from "../lib/explain";
-import type { StreamPhase } from "../lib/searchStream";
-import type { ResultRow, SearchApi, SearchResponse } from "../lib/types";
+import type {
+  ResultPresentation,
+  StateAnswer,
+} from "../lib/searchPresentation";
+import type { SearchApi } from "../lib/types";
 import { useConcepts, type Concepts } from "../lib/useConcepts";
 import { TABLE_QUERY, useMediaQuery } from "../lib/useMediaQuery";
 import { AnswerCard, BaseDates } from "./AnswerCard";
@@ -15,11 +18,7 @@ import { SearchGraph } from "./SearchGraph";
 import { ResultGroupView } from "./ResultGroup";
 
 type Tone = "info" | "warn" | "danger";
-type ResponseStream = {
-  phase: StreamPhase | undefined;
-  sentences: string[];
-  retrying: boolean;
-};
+type OpenProduct = (domain: string, productId: string) => void;
 
 function StateBox({
   tone,
@@ -29,7 +28,7 @@ function StateBox({
 }: {
   tone: Tone;
   title: string;
-  response: SearchResponse;
+  response: StateAnswer;
   children?: ReactNode;
 }) {
   const notices = response.answer.notices;
@@ -53,7 +52,7 @@ function StateBox({
           </ul>
         )}
         {children}
-        <BaseDates response={response} />
+        <BaseDates domains={response.interpretation.domains} />
       </div>
     </section>
   );
@@ -74,63 +73,93 @@ const VIEW_LABEL: Record<View, string> = {
  * 좁은 화면(<720px)에서는 ①을 늘 보이고, 나머지를 [결과 | 그래프 | 처리 과정] 전환으로 나눈다.
  */
 export function OutcomeView({
-  response,
-  stream,
+  result,
   selectedId,
   onOpen,
   onRetry,
   api,
 }: {
-  response: SearchResponse;
-  /** 스트리밍 중일 때만. phase 가 undefined 면 최종 답까지 받은 것이다(후속 질문·done 대기). */
-  stream?: ResponseStream;
+  result: ResultPresentation;
   selectedId: string | null;
-  onOpen?: (domain: string, row: ResultRow) => void;
+  onOpen: OpenProduct;
   onRetry: () => void;
   /** 개념 설명을 부를 API. 없으면 설명 영역을 만들지 않는다. */
   api?: Pick<SearchApi, "explain">;
 }) {
   // 설명은 최종 응답(done)이 온 뒤 검색 실행당 한 번만 부른다. 탭을 바꿔 본문이 다시 그려져도 여기 상태가 남는다.
-  const concepts = useConcepts(response, stream === undefined, api);
+  const { context, process, explanation, finalized, followUp } = result;
+  const concepts = useConcepts(explanation, api);
   const wide = useMediaQuery(TABLE_QUERY);
   const [view, setView] = useState<View>("result");
   const [focus, setFocus] = useState<CiteTarget | null>(null);
   const [active, setActive] = useState<number | null>(null);
-  const hasProcess =
-    response.trace !== null && response.answer.generated_by !== "fallback";
-  const hasGraph = response.interpretation.graph.nodes.length > 0;
+  const hasGraph = context.interpretation.graph.nodes.length > 0;
   const views: View[] = [
     "result",
     ...(hasGraph ? (["graph"] as const) : []),
-    ...(hasProcess ? (["process"] as const) : []),
+    ...(process ? (["process"] as const) : []),
   ];
   const tabs = !wide && views.length > 1;
   const visibleView = views.includes(view) ? view : "result";
+  const container = useRef<HTMLDivElement>(null);
+  const focused = useRef<Element | null>(null);
+
+  useLayoutEffect(() => {
+    // 확정하면서 초점이 있던 후속 질문 등을 없애면 현재 탭이나 결과 영역으로 돌려준다.
+    if (
+      !finalized ||
+      !focused.current ||
+      focused.current.isConnected ||
+      document.activeElement !== document.body
+    )
+      return;
+    const resultArea = container.current;
+    const selectedTab = resultArea?.querySelector<HTMLButtonElement>(
+      'button[role="tab"][aria-selected="true"]',
+    );
+    (selectedTab ?? resultArea)?.focus({ preventScroll: true });
+  }, [finalized]);
 
   const body = (
-    <OutcomeBody
-      response={response}
-      stream={stream}
-      selectedId={selectedId}
-      onOpen={onOpen}
-      onRetry={onRetry}
-      concepts={concepts}
-    />
+    <>
+      <OutcomeBody
+        result={result}
+        selectedId={selectedId}
+        onOpen={onOpen}
+        onRetry={onRetry}
+        concepts={concepts}
+      />
+      <QuestionChips title={followUp.title} options={followUp.options} />
+    </>
   );
 
-  const graph = <SearchGraph response={response} onOpen={onOpen} />;
+  const graph = (
+    <SearchGraph interpretation={context.interpretation} onOpen={onOpen} />
+  );
   const panel: Record<View, ReactNode> = {
     result: body,
     graph,
-    process: <ProcessView response={response} />,
+    process: process && <ProcessView response={process} />,
   };
 
   return (
     <CiteFocusContext.Provider value={{ focus, setFocus }}>
       <MappingFocusContext.Provider value={{ active, setActive }}>
-        <InterpretationCard response={response} />
-        {tabs ? (
-          <>
+        <div
+          className="seg__panel"
+          role="group"
+          aria-label="검색 결과"
+          tabIndex={-1}
+          ref={container}
+          onFocusCapture={(event) => {
+            focused.current = event.target;
+          }}
+          onBlurCapture={(event) => {
+            if (event.target.isConnected) focused.current = null;
+          }}
+        >
+          <InterpretationCard response={context} />
+          {tabs && (
             <div className="seg" role="tablist" aria-label="결과 보기 방식">
               {views.map((key) => (
                 <button
@@ -147,22 +176,25 @@ export function OutcomeView({
                 </button>
               ))}
             </div>
+          )}
+          {wide ? (
+            <>
+              {graph}
+              {panel.process}
+              {body}
+            </>
+          ) : (
+            // 처리 과정 탭이 결과 확정 때 생겨도 같은 요소에 결과를 렌더링한다.
             <div
-              role="tabpanel"
-              id={`panel-${visibleView}`}
-              aria-labelledby={`tab-${visibleView}`}
+              role={tabs ? "tabpanel" : undefined}
+              id={tabs ? `panel-${visibleView}` : undefined}
+              aria-labelledby={tabs ? `tab-${visibleView}` : undefined}
               className="seg__panel"
             >
               {panel[visibleView]}
             </div>
-          </>
-        ) : (
-          <>
-            {graph}
-            {panel.process}
-            {body}
-          </>
-        )}
+          )}
+        </div>
       </MappingFocusContext.Provider>
     </CiteFocusContext.Provider>
   );
@@ -178,108 +210,76 @@ function StreamPending({ text }: { text: string }) {
   );
 }
 
-/** outcome별 본문. 상태마다 무엇을 보여주고 무엇을 숨기는지가 여기 한곳에 있다. */
+/** 결정된 표시 상태를 그린다. 표와 답변 영역은 결과 확정 때도 같은 자리를 쓴다. */
 function OutcomeBody({
-  response,
-  stream,
+  result,
   selectedId,
   onOpen,
   onRetry,
   concepts,
 }: {
-  response: SearchResponse;
-  stream?: ResponseStream;
+  result: ResultPresentation;
   selectedId: string | null;
-  onOpen?: (domain: string, row: ResultRow) => void;
+  onOpen: OpenProduct;
   onRetry: () => void;
   concepts: Concepts;
 }) {
-  const { outcome, interpretation, results } = response;
+  const { body, context } = result;
+  if (body.kind === "pending")
+    return body.message && <StreamPending text={body.message} />;
 
-  const groups = results.map((group) => (
-    <ResultGroupView
-      key={group.domain}
-      group={group}
-      domain={interpretation.domains.find((d) => d.domain === group.domain)}
-      sort={interpretation.sort}
-      selectedId={selectedId}
-      onOpen={onOpen ? (row) => onOpen(group.domain, row) : undefined}
-    />
-  ));
-
-  // 표가 오기 전, 또는 답 문장 없이 최종 답을 기다리는 상태는 자리만 잡는다.
-  if (stream?.phase === "results")
-    return stream.retrying ? null : <StreamPending text="조회하고 있습니다." />;
-  if (
-    stream?.phase === "answer" &&
-    outcome !== "answered" &&
-    outcome !== "caveat"
-  )
-    return stream.retrying ? null : (
-      <StreamPending text="답변을 정리하고 있습니다." />
+  if (body.kind === "answer") {
+    const { interpretation, results } = context;
+    return (
+      <>
+        <AnswerCard
+          answer={body.answer}
+          caveat={body.caveat}
+          domains={interpretation.domains}
+          results={results}
+        />
+        {results.map((group) => (
+          <ResultGroupView
+            key={group.domain}
+            group={group}
+            domain={interpretation.domains.find(
+              (d) => d.domain === group.domain,
+            )}
+            sort={interpretation.sort}
+            selectedId={selectedId}
+            onOpen={(row) => onOpen(group.domain, row.product_id)}
+          />
+        ))}
+        <ConceptCards concepts={concepts} />
+      </>
     );
+  }
 
-  switch (outcome) {
-    case "answered":
-    case "caveat":
-      return (
-        <>
-          <AnswerCard
-            response={response}
-            retrying={stream?.retrying}
-            sentences={
-              stream?.phase === "answer" ? stream.sentences : undefined
-            }
-          />
-          {groups}
-          <ConceptCards concepts={concepts} />
-          <QuestionChips
-            title="이어서 물어볼 질문"
-            options={response.suggestions}
-          />
-        </>
-      );
+  const { response } = body;
+  switch (response.outcome) {
     case "no_result":
       return (
-        <>
-          <StateBox
-            tone="info"
-            title="조건에 맞는 상품이 없습니다"
-            response={response}
-          />
-          <QuestionChips
-            title="조건을 바꿔 보세요"
-            options={response.suggestions}
-          />
-        </>
+        <StateBox
+          tone="info"
+          title="조건에 맞는 상품이 없습니다"
+          response={response}
+        />
       );
     case "not_collected":
       return (
-        <>
-          <StateBox
-            tone="info"
-            title="수집하지 않은 데이터입니다"
-            response={response}
-          />
-          <QuestionChips
-            title="대신 물어볼 수 있는 질문"
-            options={response.suggestions}
-          />
-        </>
+        <StateBox
+          tone="info"
+          title="수집하지 않은 데이터입니다"
+          response={response}
+        />
       );
     case "unread":
       return (
-        <>
-          <StateBox
-            tone="info"
-            title="질문 일부를 읽지 못했습니다"
-            response={response}
-          />
-          <QuestionChips
-            title="다시 물어볼 질문"
-            options={response.suggestions}
-          />
-        </>
+        <StateBox
+          tone="info"
+          title="질문 일부를 읽지 못했습니다"
+          response={response}
+        />
       );
     case "unavailable":
       return (
@@ -306,17 +306,11 @@ function OutcomeBody({
       );
     case "refused":
       return (
-        <>
-          <StateBox
-            tone="info"
-            title="답하지 않는 질문입니다"
-            response={response}
-          />
-          <QuestionChips
-            title="대신 할 수 있는 질문"
-            options={response.suggestions}
-          />
-        </>
+        <StateBox
+          tone="info"
+          title="답하지 않는 질문입니다"
+          response={response}
+        />
       );
     case "error":
       return (
@@ -329,9 +323,11 @@ function OutcomeBody({
             요청 처리 중 오류가 발생했습니다. 같은 요청을 다시 보내도 새로
             해석하지 않습니다. 새 검색으로 시작해 주세요.
           </p>
-          <p className="muted small">
-            요청 ID <span className="code">{response.request_id}</span>
-          </p>
+          {response.request_id !== null && (
+            <p className="muted small">
+              요청 ID <span className="code">{response.request_id}</span>
+            </p>
+          )}
           <div className="search-actions">
             <button type="button" className="button" onClick={onRetry}>
               <Icon name="refresh" size={16} />새 검색으로 시작

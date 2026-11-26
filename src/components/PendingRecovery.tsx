@@ -5,11 +5,10 @@ import {
   type MouseEventHandler,
   type RefObject,
 } from "react";
+import { IN_PROGRESS_TITLE } from "../lib/searchPresentation";
 import { useDeadlineCountdown } from "../lib/useCountdown";
 import type { PendingRequestRecovery } from "../lib/useSearchRun";
 import { Icon } from "./Icon";
-
-export const IN_PROGRESS_TITLE = "기존 요청을 처리하고 있습니다";
 
 export function SentAnswer({ answer }: { answer: string }) {
   return (

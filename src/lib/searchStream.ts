@@ -40,20 +40,6 @@ export interface StreamView {
   retrying: boolean;
 }
 
-/**
- * 스트리밍 중 화면이 어디까지 왔는가. interpreting: 최종 해석 전(미리보기만 있을 수 있다).
- * results: 해석만 있고 표는 아직. answer: 표가 있고 답 문장을 받는 중.
- * 최종 답(answer_done)이 오면 더는 스트리밍 단계가 아니다(undefined).
- * 표를 그리는 OutcomeView 는 최종 해석이 온 뒤에만 만들어지므로 interpreting 은 받지 않는다.
- */
-export type StreamPhase = "interpreting" | "results" | "answer";
-
-export function streamPhase(view: StreamView): StreamPhase | undefined {
-  if (view.interpretation === null) return "interpreting";
-  if (view.results === null) return "results";
-  return view.answer === null ? "answer" : undefined;
-}
-
 export function emptyView(): StreamView {
   return {
     requestId: null,
@@ -105,35 +91,6 @@ export function applyEvent(view: StreamView, event: StreamEvent): StreamView {
     case "confirmation_required":
       return view;
   }
-}
-
-/**
- * 지금까지 받은 것으로 화면이 쓸 임시 응답을 만든다. 해석이 아직 안 왔으면 null.
- * 완성 응답과 다른 점: trace 가 없고, 상품 노드 cited 는 false 이며(답변↔표 연결은 done 에서 생긴다),
- * 답 문장은 지금까지 덧붙은 만큼이다.
- */
-export function provisionalResponse(
-  view: StreamView,
-  question: string,
-): SearchResponse | null {
-  if (view.interpretation === null) return null;
-  const graph = view.results?.graph ?? view.interpretation.graph;
-  const answer: Answer = view.answer ?? {
-    text: view.sentences.join(" "),
-    generated_by: "llm",
-    notices: [],
-  };
-  return {
-    request_id: view.requestId ?? "",
-    question,
-    outcome: view.results?.outcome ?? "answered",
-    answer,
-    interpretation: { ...view.interpretation, graph },
-    results: view.results?.results ?? [],
-    clarify: view.results?.clarify ?? null,
-    suggestions: view.suggestions ?? [],
-    trace: null,
-  };
 }
 
 /** JSON 검색 결과를 스트림 경로와 같은 RunResult 로 맞춘다. */

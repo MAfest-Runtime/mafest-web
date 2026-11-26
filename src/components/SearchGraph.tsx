@@ -8,7 +8,6 @@ import {
   type CSSProperties,
   type MouseEvent,
 } from "react";
-import { useNavigate } from "react-router";
 import { useMappingFocus } from "../lib/citeFocus";
 import {
   describeGraph,
@@ -24,7 +23,7 @@ import {
   type PlacedEdge,
   type PlacedNode,
 } from "../lib/graphLayout";
-import type { ResultRow, SearchResponse } from "../lib/types";
+import type { Interpretation } from "../lib/types";
 import { TABLE_QUERY, useMediaQuery } from "../lib/useMediaQuery";
 import { Icon } from "./Icon";
 
@@ -59,16 +58,14 @@ function drawable(e: PlacedEdge): boolean {
  *   없는 환경에서는 바로 다 보인다. CSS 애니메이션(투명도·위치·선 긋기)만 쓴다.
  */
 export function SearchGraph({
-  response,
+  interpretation: it,
   onOpen,
 }: {
-  response: SearchResponse;
-  onOpen?: (domain: string, row: ResultRow) => void;
+  interpretation: Interpretation;
+  onOpen: (domain: string, productId: string) => void;
 }) {
-  const it = response.interpretation;
   const graph = it.graph;
   const wide = useMediaQuery(TABLE_QUERY);
-  const navigate = useNavigate();
   const { active, setActive } = useMappingFocus();
   const uid = useId().replace(/:/g, "");
   const box = useRef<HTMLDivElement>(null);
@@ -170,11 +167,7 @@ export function SearchGraph({
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)
       return;
     event.preventDefault();
-    const row = response.results
-      .find((g) => g.domain === node.domain)
-      ?.rows.find((r) => r.product_id === node.product_id);
-    if (onOpen && row) onOpen(node.domain, row);
-    else navigate(productHref(node.domain, node.product_id));
+    onOpen(node.domain, node.product_id);
   };
 
   const marker = (kind: string) => `url(#${uid}-${kind})`;
