@@ -12,14 +12,13 @@ import {
 } from "./types";
 import {
   ContractError,
+  createStreamValidator,
   validateErrorBody,
   validateExplainResponse,
   validateMeta,
   validateProductDetail,
   validateSearchResponse,
   validateSearchResult,
-  validateStream,
-  validateStreamEvent,
 } from "./validate";
 
 /**
@@ -137,21 +136,6 @@ function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-/**
- * 지금까지 받은 이벤트의 순서를 기존 validateStream으로 본다. 진행 중인 스트림은 아직 done·error로 끝나지
- * 않아 마지막 검사(경로 "stream")만 실패하는데, 그것은 정상이므로 넘긴다. 그 밖의 경로는 계약 위반이다.
- */
-function assertOrder(
-  received: ReadonlyArray<{ event: unknown; data: unknown }>,
-) {
-  try {
-    validateStream(received);
-  } catch (error) {
-    if (error instanceof ContractError && error.path === "stream") return;
-    throw error;
-  }
-}
-
 /** 스트림을 열기 전 응답이 "스트림을 못 쓴다"는 뜻인가. 422·429·504는 화면 오류 규칙을 그대로 따른다. */
 function streamUnavailable(status: number): boolean {
   return status === 404 || (status >= 500 && status !== 504);
@@ -214,23 +198,17 @@ async function* openStream(
   )
     throw new StreamUnavailableError();
 
-  const received: Array<{ event: unknown; data: unknown }> = [];
-  let mappings: unknown = [];
+  // 같은 검색 실행으로 다시 연결해도 새 응답은 start부터 독립적으로 검사한다.
+  const validator = createStreamValidator();
+  let terminal: StreamEvent | undefined;
   try {
     for await (const raw of parseSse(response.body)) {
-      received.push(raw);
-      assertOrder(received);
-      const event = validateStreamEvent(raw.event, raw.data, mappings);
-      if (event.event === "interpretation")
-        mappings = event.data.interpretation.mappings;
+      const event = validator.accept(raw);
       if (event.event === "error") throw streamError(event.data);
-      if (event.event === "done" || event.event === "confirmation_required") {
-        // confirmation_required 도 done 처럼 스트림의 정상 종료다. 끊김으로 보면 자동 재시도가 같은 질문을
-        // 다시 해석하게 된다.
-        yield event;
-        // 서버가 소켓을 늦게 닫아도 화면 확정을 기다리지 않는다. return으로 안쪽
-        // parseSse 반복을 닫으면 그 finally가 reader.cancel()을 수행한다.
-        return;
+      if (validator.finished) {
+        terminal = event;
+        // 종료 이벤트를 넘기기 전에 parseSse를 닫아 다음 요청 없이도 읽기를 취소한다.
+        break;
       }
       yield event;
     }
@@ -243,7 +221,8 @@ async function* openStream(
     // 본문을 읽던 중 연결이 끊김. 끊긴 이벤트는 파서가 이미 버렸다.
     throw new StreamCutError();
   }
-  throw new StreamCutError();
+  if (terminal === undefined) throw new StreamCutError();
+  yield terminal;
 }
 
 /**

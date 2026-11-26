@@ -10,6 +10,8 @@ RUN npm ci
 COPY index.html tsconfig.app.json tsconfig.json tsconfig.node.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+COPY contract ./contract
+COPY scripts/generate-answer-validator.mjs ./scripts/
 
 # 운영 번들은 항상 같은 origin의 /v1(mafest-api)을 호출한다. real로 빌드하면 mock 모듈과
 # 합성 픽스처가 번들에서 빠진다(src/lib/client.ts). .env는 빌드 컨텍스트에서 제외한다.
