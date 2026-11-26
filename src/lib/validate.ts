@@ -1,4 +1,6 @@
+import type { ErrorObject } from "ajv";
 import validateAnswerStructure from "./generated/answer-validator.mjs";
+import validateExplainStructure from "./generated/explain-response-validator.mjs";
 import {
   CONFIRM_ACTIONS,
   CONFIRM_ANSWER_MAX,
@@ -18,8 +20,6 @@ import {
   RELATION_TYPES,
   TRACE_STAGES,
   VALUE_SOURCES,
-  CONCEPT_SOURCES_MAX,
-  CONCEPT_TOPICS_MAX,
   DRAFT_SPANS_MAX,
   STREAM_EVENT_NAMES,
   SUGGESTIONS_MAX,
@@ -179,12 +179,16 @@ function validateClarify(v: unknown, path: string): void {
 const TABLE_OUTCOMES: ReadonlySet<string> = new Set(["answered", "caveat"]);
 
 function validateAnswer(v: unknown): void {
-  if (validateAnswerStructure(v)) return;
-  const error = validateAnswerStructure.errors?.[0];
-  if (!error) throw new ContractError("answer");
+  if (!validateAnswerStructure(v))
+    throw structureError("answer", validateAnswerStructure.errors?.[0]);
+}
 
-  // JSON Pointer를 기존 answer.notices[0].text 형식으로 옮겨 오류 위치만 남긴다.
-  let path = "answer";
+/** 생성 검증기의 JSON Pointer를 기존 배열·필드 경로로 옮겨 오류 위치만 남긴다. */
+function structureError(
+  path: string,
+  error: ErrorObject | undefined,
+): ContractError {
+  if (!error) return new ContractError(path);
   for (const segment of error.instancePath.split("/").slice(1)) {
     const key = segment.replaceAll("~1", "/").replaceAll("~0", "~");
     path = /^\d+$/.test(key) ? `${path}[${key}]` : child(path, key);
@@ -193,7 +197,7 @@ function validateAnswer(v: unknown): void {
     path = child(path, error.params.missingProperty);
   if (error.keyword === "additionalProperties")
     path = child(path, error.params.additionalProperty);
-  throw new ContractError(path);
+  return new ContractError(path);
 }
 
 const GRAPH_ID = /^[A-Za-z0-9_-]{1,32}$/;
@@ -534,42 +538,11 @@ export function validateMeta(input: unknown): Meta {
   return m as unknown as Meta;
 }
 
-/** 설명 출처 링크. 화면이 그대로 `href`에 쓰므로 http(s)만 받는다(yaml ConceptSource.url 패턴). */
-const SOURCE_URL = /^https?:\/\/\S+$/;
-const CONCEPT_ID = /^[a-z0-9_]+$/;
-
 /** `POST /v1/explain` 응답(yaml ExplainResponse). 주제 0~2개, 빈 목록은 정상이다. */
 export function validateExplainResponse(input: unknown): ExplainResponse {
-  const e = record(input, "$", ["topics"]);
-  arr(e.topics, "topics", CONCEPT_TOPICS_MAX).forEach((t, i) => {
-    const p = `topics[${i}]`;
-    const topic = record(t, p, [
-      "id",
-      "title",
-      "summary",
-      "detail",
-      "sources",
-      "reviewed_at",
-    ]);
-    const id = str(topic.id, `${p}.id`, 1, 64);
-    if (!CONCEPT_ID.test(id)) throw new ContractError(`${p}.id`);
-    str(topic.title, `${p}.title`, 1, 30);
-    str(topic.summary, `${p}.summary`, 1, 120);
-    str(topic.detail, `${p}.detail`, 1, 600);
-    const sources = arr(topic.sources, `${p}.sources`, CONCEPT_SOURCES_MAX);
-    if (sources.length < 1) throw new ContractError(`${p}.sources`);
-    sources.forEach((s, j) => {
-      const sp = `${p}.sources[${j}]`;
-      const source = record(s, sp, ["title", "url"]);
-      str(source.title, `${sp}.title`, 1, 60);
-      const url = str(source.url, `${sp}.url`, 1, 300);
-      if (!SOURCE_URL.test(url)) throw new ContractError(`${sp}.url`);
-    });
-    const reviewed = str(topic.reviewed_at, `${p}.reviewed_at`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewed))
-      throw new ContractError(`${p}.reviewed_at`);
-  });
-  return e as unknown as ExplainResponse;
+  if (!validateExplainStructure(input))
+    throw structureError("$", validateExplainStructure.errors?.[0]);
+  return input;
 }
 
 /** yaml SessionToken. 세션 id·secret 은 추측할 수 없는 값이며 헤더에 안전한 문자만 쓴다. */

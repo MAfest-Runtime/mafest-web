@@ -474,9 +474,7 @@ export interface ExplainResponse {
   topics: ConceptTopic[];
 }
 
-/** 설명 주제 상한. */
-export const CONCEPT_TOPICS_MAX = 2;
-export const CONCEPT_SOURCES_MAX = 3;
+/** 개념 설명 요청의 상품군·조건 축 상한. */
 export const EXPLAIN_DOMAINS_MAX = 6;
 export const EXPLAIN_AXES_MAX = 12;
 

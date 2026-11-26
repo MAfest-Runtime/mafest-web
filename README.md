@@ -72,7 +72,7 @@ VITE_API_MODE=real VITE_LOCAL_API_TARGET=http://127.0.0.1:18080 npm run dev   # 
 - mafest-agent는 이 파일을 `tests/contract/`로 복사해 실제 응답을 같은 스키마로 검사한다. 사본은 정본과 바이트 단위로 같아야 한다.
 - 웹 쪽 구현은 `src/lib/types.ts`(타입)와 `src/lib/validate.ts`(받는 즉시 검사)다. 응답이 계약과 다르면 "응답 형식 오류"로 보인다.
 - yaml을 고치면 types·validate·픽스처를 함께 고친다.
-- `Answer`나 참조 스키마를 바꿨다면 `npm run contract:generate-answer`로 검증기를 다시 생성한다. 개발 서버, 타입 검사, 운영 빌드는 정본에서 다시 생성한 결과와 체크아웃에 포함된 검증기가 일치하는지 확인한다.
+- `Answer`, `ExplainResponse` 또는 참조 스키마를 바꿨다면 `npm run contract:generate`로 검증기를 다시 생성한다. 개발 서버, 타입 검사, 운영·컨테이너 빌드는 정본에서 다시 생성한 결과와 체크아웃에 포함된 검증기가 일치하는지 확인한다.
 
 ## 배포
 
