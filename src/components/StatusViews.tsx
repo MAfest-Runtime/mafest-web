@@ -1,4 +1,4 @@
-import { useCountdown, useDeadlineCountdown } from "../lib/useCountdown";
+import { useCountdown } from "../lib/useCountdown";
 import { useElapsed } from "../lib/useElapsed";
 import type { ApiError } from "../lib/types";
 import { Icon } from "./Icon";
@@ -8,25 +8,23 @@ import { Icon } from "./Icon";
  */
 export function SearchLoading({
   startedAt,
+  description,
   retrying = false,
 }: {
   startedAt: number;
+  description: string;
   retrying?: boolean;
 }) {
   const elapsed = useElapsed(startedAt);
   return (
-    <div className="loading card" role="status" aria-live="polite">
+    <div className="loading card">
       <span className="spinner" aria-hidden="true" />
       <div>
         <p className="loading__title">
           검색 중 <span className="num">· {elapsed}초</span>
         </p>
         <p className="muted">
-          {retrying
-            ? "연결이 끊겨 다시 시도하고 있습니다."
-            : elapsed < 2
-              ? "질문을 해석하고 조회하고 있습니다."
-              : "답변 문장을 만들고 있습니다."}
+          {retrying ? "연결이 끊겨 다시 시도하고 있습니다." : description}
         </p>
       </div>
       <div className="skeleton" aria-hidden="true">
@@ -39,12 +37,14 @@ export function SearchLoading({
 }
 
 /** 스트림이 끊겨 한 번 다시 요청하는 동안 표 위에 띄우는 안내. 그동안 답 문장 영역은 비어 있다. */
-export function RetryingNotice() {
+export function RetryingNotice({ hasResults }: { hasResults: boolean }) {
   return (
-    <div className="banner banner--warn" role="status">
+    <div className="banner banner--warn">
       <Icon name="refresh" size={16} />
-      연결이 끊겨 다시 시도하고 있습니다. 표는 그대로이고 답변 문장을 새로
-      받습니다.
+      <span>
+        연결이 끊겨 다시 시도하고 있습니다.
+        {hasResults && " 받은 조회 결과를 유지하고 답변을 다시 받습니다."}
+      </span>
     </div>
   );
 }
@@ -91,71 +91,23 @@ function describe(error: ApiError): { title: string; body: string } {
   };
 }
 
-/**
- * 최초 검색이 처리 결과를 알 수 없이 끝났을 때(연결 오류·504·일반 5xx). 버튼은 **같은 질문·같은 실행 키**로
- * 다시 확인하는 `resend` 하나다. 자동으로 보내지 않으며, 확인이 결과나 성공을 보장하지도 않는다.
- */
-export function SearchUnknown({
-  error,
-  onResend,
-}: {
-  error: ApiError;
-  onResend: () => void;
-}) {
-  return (
-    <div className="state card state--danger" role="alert">
-      <Icon name="alert" size={20} />
-      <div className="state__body">
-        <h2>처리 결과를 확인하지 못했습니다</h2>
-        <p>
-          같은 요청으로 다시 확인할 수 있지만, 결과 확인이나 성공을 보장하지
-          않습니다.
-        </p>
-        {error.requestId && (
-          <p className="muted small">
-            요청 ID <span className="code">{error.requestId}</span>
-          </p>
-        )}
-        <button type="button" className="secondary" onClick={onResend}>
-          <Icon name="refresh" size={16} />
-          같은 요청으로 확인
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * 최초 검색의 409. code 로 세 가지를 가른다.
- * - turn_in_progress: 서버가 같은 키의 요청을 처리 중이다. 대기 뒤 사용자가 누르면 **같은 요청**(같은 키)을 보낸다.
- * - session_conflict·turn_indeterminate: 같은 키로는 회복하지 않는다. 재전송 없이 새 검색(새 키)만 연다.
- */
+/** 검색 실행을 이어갈 수 없는 충돌은 새 검색으로 시작한다. */
 export function SearchConflict({
   error,
-  retryAt,
-  onResend,
   onNewSearch,
 }: {
   error: ApiError;
-  retryAt: number | null;
-  onResend: () => void;
   onNewSearch: () => void;
 }) {
-  const waiting = retryAt !== null;
-  const left = useDeadlineCountdown(retryAt);
-  const message = waiting
-    ? {
-        title: "기존 요청을 처리하고 있습니다",
-        body: "잠시 뒤 같은 요청으로 상태를 확인할 수 있습니다. 새로 해석하지 않습니다.",
-      }
-    : error.code === "turn_indeterminate"
+  const message =
+    error.code === "turn_indeterminate"
       ? {
           title: "이 요청은 더 이어갈 수 없습니다",
           body: "새 검색으로 시작해 주세요.",
         }
       : {
           title: "요청이 충돌했습니다",
-          body: "같은 요청 번호가 다른 질문에 이미 쓰였습니다. 새 검색으로 시작해 주세요.",
+          body: "요청 정보가 서버의 기록과 일치하지 않습니다. 새 검색으로 시작해 주세요.",
         };
   return (
     <div className="state card state--danger" role="alert">
@@ -163,29 +115,16 @@ export function SearchConflict({
       <div className="state__body">
         <h2>{message.title}</h2>
         <p>{message.body}</p>
-        {waiting && left > 0 && (
-          <p className="num">{left}초 뒤에 같은 요청으로 확인할 수 있습니다.</p>
-        )}
         {error.requestId && (
           <p className="muted small">
             요청 ID <span className="code">{error.requestId}</span>
           </p>
         )}
-        {waiting ? (
-          <button
-            type="button"
-            className="secondary"
-            disabled={left > 0}
-            onClick={onResend}
-          >
-            <Icon name="refresh" size={16} />
-            같은 요청으로 확인
-          </button>
-        ) : (
-          <button type="button" className="secondary" onClick={onNewSearch}>
+        <div className="search-actions">
+          <button type="button" className="button" onClick={onNewSearch}>
             <Icon name="refresh" size={16} />새 검색으로 시작
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -199,17 +138,28 @@ export function RequestFailed({
   error: ApiError;
   onRetry?: () => void;
 }) {
-  const left = useCountdown(error.status === 429 ? error.retryAfter : null);
+  const retryAfter = error.status === 429 ? error.retryAfter : null;
+  const left = useCountdown(retryAfter);
   const { title, body } = describe(error);
   const canRetry = onRetry && error.status !== 404 && error.status !== 422;
   return (
-    <div className="state card state--danger" role="alert">
+    <div className="state card state--danger">
       <Icon name="alert" size={20} />
       <div className="state__body">
-        <h2>{title}</h2>
-        <p>{body}</p>
-        {error.status === 429 && left > 0 && (
-          <p className="num">{left}초 뒤에 다시 시도할 수 있습니다.</p>
+        <div className="recovery__message" role="alert">
+          <h2>{title}</h2>
+          <p>{body}</p>
+        </div>
+        {retryAfter !== null && retryAfter > 0 && (
+          <div className="recovery__wait">
+            {left > 0 && <p>{left}초 뒤에 다시 시도할 수 있습니다.</p>}
+            <p
+              role="status"
+              className={left > 0 ? "visually-hidden" : undefined}
+            >
+              {left === 0 && "이제 다시 시도할 수 있습니다."}
+            </p>
+          </div>
         )}
         {error.requestId && (
           <p className="muted small">

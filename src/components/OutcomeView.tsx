@@ -15,6 +15,11 @@ import { SearchGraph } from "./SearchGraph";
 import { ResultGroupView } from "./ResultGroup";
 
 type Tone = "info" | "warn" | "danger";
+type ResponseStream = {
+  phase: StreamPhase | undefined;
+  sentences: string[];
+  retrying: boolean;
+};
 
 function StateBox({
   tone,
@@ -78,7 +83,7 @@ export function OutcomeView({
 }: {
   response: SearchResponse;
   /** 스트리밍 중일 때만. phase 가 undefined 면 최종 답까지 받은 것이다(후속 질문·done 대기). */
-  stream?: { phase: StreamPhase | undefined; sentences: string[] };
+  stream?: ResponseStream;
   selectedId: string | null;
   onOpen?: (domain: string, row: ResultRow) => void;
   onRetry: () => void;
@@ -166,7 +171,7 @@ export function OutcomeView({
 /** 스트림에서 아직 못 받은 본문 자리. 화면이 흔들리지 않게 한 줄 높이를 잡는다. */
 function StreamPending({ text }: { text: string }) {
   return (
-    <div className="card stream-pending" role="status">
+    <div className="card stream-pending">
       <span className="spinner" aria-hidden="true" />
       <p className="muted">{text}</p>
     </div>
@@ -183,7 +188,7 @@ function OutcomeBody({
   concepts,
 }: {
   response: SearchResponse;
-  stream?: { phase: StreamPhase | undefined; sentences: string[] };
+  stream?: ResponseStream;
   selectedId: string | null;
   onOpen?: (domain: string, row: ResultRow) => void;
   onRetry: () => void;
@@ -204,13 +209,15 @@ function OutcomeBody({
 
   // 표가 오기 전, 또는 답 문장 없이 최종 답을 기다리는 상태는 자리만 잡는다.
   if (stream?.phase === "results")
-    return <StreamPending text="조회하고 있습니다." />;
+    return stream.retrying ? null : <StreamPending text="조회하고 있습니다." />;
   if (
     stream?.phase === "answer" &&
     outcome !== "answered" &&
     outcome !== "caveat"
   )
-    return <StreamPending text="답변을 정리하고 있습니다." />;
+    return stream.retrying ? null : (
+      <StreamPending text="답변을 정리하고 있습니다." />
+    );
 
   switch (outcome) {
     case "answered":
@@ -219,6 +226,7 @@ function OutcomeBody({
         <>
           <AnswerCard
             response={response}
+            retrying={stream?.retrying}
             sentences={
               stream?.phase === "answer" ? stream.sentences : undefined
             }
@@ -324,9 +332,11 @@ function OutcomeBody({
           <p className="muted small">
             요청 ID <span className="code">{response.request_id}</span>
           </p>
-          <button type="button" className="secondary" onClick={onRetry}>
-            <Icon name="refresh" size={16} />새 검색으로 시작
-          </button>
+          <div className="search-actions">
+            <button type="button" className="button" onClick={onRetry}>
+              <Icon name="refresh" size={16} />새 검색으로 시작
+            </button>
+          </div>
         </StateBox>
       );
   }

@@ -26,10 +26,12 @@ export function BaseDates({ response }: { response: SearchResponse }) {
 export function AnswerCard({
   response,
   sentences,
+  retrying = false,
 }: {
   response: SearchResponse;
   /** 스트리밍 중에 지금까지 받은 문장. 없으면 완성된 답이다. */
   sentences?: string[];
+  retrying?: boolean;
 }) {
   const { answer, outcome } = response;
   return (
@@ -52,7 +54,7 @@ export function AnswerCard({
         </span>
       </header>
       {sentences ? (
-        <StreamingText sentences={sentences} />
+        <StreamingText sentences={sentences} retrying={retrying} />
       ) : (
         <AnswerText response={response} />
       )}
@@ -77,7 +79,13 @@ export function AnswerCard({
  * 스트리밍 중 답변 문장. 문장마다 노드를 하나씩 덧붙여서, 스크린 리더가 새 문장만 읽게 한다(aria-live=polite).
  * 아직 문장이 없으면 자리를 잡는 안내 한 줄을 둔다. 인용 연결은 done 에서 cited 가 확정된 뒤에 생긴다.
  */
-function StreamingText({ sentences }: { sentences: string[] }) {
+function StreamingText({
+  sentences,
+  retrying,
+}: {
+  sentences: string[];
+  retrying: boolean;
+}) {
   return (
     <p
       className="answer__text answer__text--streaming"
@@ -85,7 +93,7 @@ function StreamingText({ sentences }: { sentences: string[] }) {
       aria-atomic="false"
       aria-busy="true"
     >
-      {sentences.length === 0 ? (
+      {sentences.length === 0 && !retrying ? (
         <span className="answer__pending">답변 문장을 만들고 있습니다.</span>
       ) : (
         sentences.map((sentence, index) => (
